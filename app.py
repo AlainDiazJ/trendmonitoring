@@ -288,6 +288,27 @@ if df.empty:
     st.warning("La base existe pero no tiene datos. Corre el ETL sobre tus archivos.")
     st.stop()
 
+# Puntos ocultados con alcance GLOBAL (desde Correlacion Ref.): se excluyen de
+# TODAS las pestanas. Prefiere stable_point_key; point_id solo como fallback
+# de registros viejos sin llave. Nada se borra de motores.db.
+_ocultos_global = cfg.list_hidden_points_detail(scope=cfg.GLOBAL_HIDDEN_SCOPE)
+if _ocultos_global:
+    _g_keys = {d["stable_point_key"] for d in _ocultos_global if d["stable_point_key"]}
+    _g_ids = {d["point_id"] for d in _ocultos_global if not d["stable_point_key"]}
+    _mask_g = df["stable_point_key"].isin(_g_keys) | df["point_id"].isin(_g_ids)
+    if _mask_g.any():
+        df = df[~_mask_g]
+        st.caption(
+            f"{len(_ocultos_global)} punto(s) ocultos globalmente "
+            "(se administran en Correlacion Ref. > puntos ocultos)."
+        )
+    if df.empty:
+        st.warning("Todos los puntos estan ocultos globalmente.")
+        if st.button("Restaurar todos los puntos ocultos globales"):
+            cfg.unhide_all_points(scope=cfg.GLOBAL_HIDDEN_SCOPE)
+            st.rerun()
+        st.stop()
+
 _parse_counts = df[["point_id", "date_parse_status"]].drop_duplicates()["date_parse_status"].value_counts(dropna=False)
 _n_amb = int(_parse_counts.get("ambiguous", 0))
 _n_err = int(_parse_counts.get("error", 0) + _parse_counts.get("missing", 0))

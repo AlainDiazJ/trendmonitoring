@@ -33,10 +33,16 @@ PUNTOS OCULTOS
 --------------
 Un punto puede estar mal calculado (error de captura, celda descalibrada,
 etc.) sin que se quiera borrar el Excel completo de motores.db. Para eso,
-config_store.hidden_points guarda que point_id se debe excluir de esta
-vista (scope='correlacion_ref'). El ocultamiento es reversible y sobrevive
-a volver a correr etl.py / resync_measurements.py, porque ninguno de los
-dos recrea test_points existentes (el point_id no cambia).
+config_store.hidden_points guarda que punto se debe excluir, con tres
+alcances posibles elegibles desde la UI:
+  - solo un par (scope='correlacion_ref::<par>'): el punto puede ser valido
+    en cinco correlaciones y problematico solo en una;
+  - toda esta vista (scope='correlacion_ref');
+  - global (scope=config_store.GLOBAL_HIDDEN_SCOPE): lo filtra app.py al
+    cargar, asi que desaparece de todas las pestanas.
+El ocultamiento es reversible y sobrevive a volver a correr etl.py /
+resync_measurements.py, porque se guarda con stable_point_key (que no
+cambia al regenerar la base).
 """
 
 from __future__ import annotations
@@ -50,11 +56,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from config_store import (
+    GLOBAL_HIDDEN_SCOPE,
     hide_point,
     unhide_point,
     unhide_all_points,
-    list_hidden_points,
-    list_hidden_point_keys,
     list_hidden_points_detail,
 )
 
@@ -123,6 +128,32 @@ PARES_CON_CONVERSION_K_A_C = {
 # Scope fijo con el que esta vista guarda/consulta sus puntos ocultos en
 # config_store.hidden_points. No lo cambies sin migrar los datos existentes.
 HIDDEN_SCOPE = "correlacion_ref"
+
+# Etiquetas de alcance que se ofrecen al ocultar un punto.
+ALCANCE_PAR = "Solo este par"
+ALCANCE_VISTA = "Toda Correlacion Ref."
+ALCANCE_GLOBAL = "Global (toda la app)"
+
+
+def _scope_par(nombre_par: str) -> str:
+    """Scope de ocultamiento especifico de un par de correlacion."""
+    return f"{HIDDEN_SCOPE}::{nombre_par}"
+
+
+def _filtrar_ocultos(df: pd.DataFrame, scope: str) -> pd.DataFrame:
+    """Quita de df los puntos ocultos en ese scope. Prefiere stable_point_key;
+    point_id solo se usa para registros viejos que no guardaron llave."""
+    detalle = list_hidden_points_detail(scope=scope)
+    if not detalle:
+        return df
+    keys = {d["stable_point_key"] for d in detalle if d["stable_point_key"]}
+    ids = {d["point_id"] for d in detalle if not d["stable_point_key"]}
+    mask = pd.Series(False, index=df.index)
+    if keys and "stable_point_key" in df.columns:
+        mask |= df["stable_point_key"].isin(keys)
+    if ids:
+        mask |= df["point_id"].isin(ids)
+    return df[~mask]
 
 
 # ---------------------------------------------------------------------------
@@ -367,34 +398,52 @@ def graficar_par(par: ParCorrelacion, motor_x, motor_y, motor_df, grado: int, n_
 # UI de puntos ocultos
 # ---------------------------------------------------------------------------
 
+def _scopes_de_ocultamiento():
+    """Todos los scopes que administra esta vista, con su etiqueta legible."""
+    scopes = [
+        (HIDDEN_SCOPE, "toda la vista"),
+        (GLOBAL_HIDDEN_SCOPE, "GLOBAL (toda la app)"),
+    ]
+    scopes += [(_scope_par(nombre), f"solo {nombre}") for nombre in BLOQUES_COLUMNAS]
+    return scopes
+
+
 def _render_panel_ocultos(sel_var: str):
-    """Expander con puntos ocultos y boton para restaurarlos."""
-    detalle = list_hidden_points_detail(scope=HIDDEN_SCOPE)
-    if not detalle:
+    """Expander con puntos ocultos (todos los alcances) y boton para restaurarlos."""
+    items = []
+    for scope, etiqueta in _scopes_de_ocultamiento():
+        for d in list_hidden_points_detail(scope=scope):
+            d["scope"] = scope
+            d["alcance"] = etiqueta
+            items.append(d)
+    if not items:
         return
-    with st.expander(f"{len(detalle)} punto(s) oculto(s) en esta vista", expanded=False):
+    with st.expander(f"{len(items)} punto(s) oculto(s)", expanded=False):
         st.caption(
             "Estos puntos siguen intactos en motores.db; solo estan excluidos "
-            "de las graficas de Correlacion Ref."
+            "segun su alcance: un par especifico, toda Correlacion Ref. o "
+            "toda la app (global)."
         )
-        if st.button(f"Restaurar todos ({len(detalle)})", key="corr_ref_unhide_all"):
-            unhide_all_points(scope=HIDDEN_SCOPE)
+        if st.button(f"Restaurar todos ({len(items)})", key="corr_ref_unhide_all"):
+            for scope, _ in _scopes_de_ocultamiento():
+                unhide_all_points(scope=scope)
             _limpiar_selecciones_tabla(sel_var)
             st.rerun()
         st.divider()
-        for item in detalle:
+        for item in items:
             c1, c2 = st.columns([5, 1])
             with c1:
                 motivo = item["reason"] or "(sin motivo especificado)"
                 key_short = (item.get("stable_point_key") or "")[:10]
                 st.caption(
-                    f"point_id {item['point_id']} - key {key_short} - {motivo} - ocultado {item['created_at']}"
+                    f"[{item['alcance']}] point_id {item['point_id']} - key {key_short} - "
+                    f"{motivo} - ocultado {item['created_at']}"
                 )
             with c2:
                 btn_key = item.get("stable_point_key") or item["point_id"]
-                if st.button("Restaurar", key=f"corr_ref_unhide_{btn_key}"):
+                if st.button("Restaurar", key=f"corr_ref_unhide_{item['scope']}_{btn_key}"):
                     unhide_point(
-                        item["point_id"], scope=HIDDEN_SCOPE,
+                        item["point_id"], scope=item["scope"],
                         stable_point_key=item.get("stable_point_key"),
                     )
                     _limpiar_selecciones_tabla(sel_var)
@@ -430,18 +479,36 @@ def _render_boton_ocultar(evento, tabla_fuera: pd.DataFrame, nombre_par: str, se
 
     seleccion = tabla_fuera.iloc[filas_sel].drop_duplicates("point_id")
     ids_sel = sorted(set(seleccion["point_id"].tolist()))
+
+    alcance = st.radio(
+        "Alcance del ocultamiento",
+        [ALCANCE_PAR, ALCANCE_VISTA, ALCANCE_GLOBAL],
+        horizontal=True,
+        key=f"corr_ref_alcance_{sel_var}_{nombre_par}",
+        help=(
+            "Solo este par: el punto sigue visible en las demas correlaciones. "
+            "Toda Correlacion Ref.: se excluye de los 6 pares. "
+            "Global: se excluye de TODAS las pestanas de la app."
+        ),
+    )
+    scope_sel = {
+        ALCANCE_PAR: _scope_par(nombre_par),
+        ALCANCE_VISTA: HIDDEN_SCOPE,
+        ALCANCE_GLOBAL: GLOBAL_HIDDEN_SCOPE,
+    }[alcance]
+
     if st.button(
-        f"Ocultar {len(ids_sel)} punto(s) seleccionado(s) de esta vista",
+        f"Ocultar {len(ids_sel)} punto(s) seleccionado(s) ({alcance.lower()})",
         key=f"corr_ref_ocultar_btn_{sel_var}_{nombre_par}",
     ):
         for _, row in seleccion.iterrows():
             hide_point(
-                int(row["point_id"]), scope=HIDDEN_SCOPE,
+                int(row["point_id"]), scope=scope_sel,
                 stable_point_key=row.get("stable_point_key"),
                 reason=f"Marcado mal calculado en {nombre_par} ({sel_lbl})",
             )
         _limpiar_selecciones_tabla(sel_var)
-        st.success(f"{len(ids_sel)} punto(s) ocultado(s) de esta vista. Recargando...")
+        st.success(f"{len(ids_sel)} punto(s) ocultado(s) ({alcance.lower()}). Recargando...")
         st.rerun()
 
 
@@ -463,17 +530,12 @@ def render(fdf: pd.DataFrame, sel_var: str, sel_lbl: str):
         return
     st.success(f"Correlacion cargada de {origen} - {len(pares)} pares.")
 
-    # Puntos ocultados manualmente en esta vista (no se borran de motores.db,
-    # solo se excluyen de las graficas y tablas de aqui abajo).
-    hidden_keys = list_hidden_point_keys(scope=HIDDEN_SCOPE)
-    hidden_ids = list_hidden_points(scope=HIDDEN_SCOPE)
+    # Puntos ocultados manualmente (no se borran de motores.db, solo se
+    # excluyen). Los globales ya vienen filtrados desde app.py; aqui se aplica
+    # el alcance "toda la vista". El alcance "solo este par" se aplica mas
+    # abajo, par por par.
     _render_panel_ocultos(sel_var)
-    if hidden_keys and "stable_point_key" in fdf.columns:
-        fdf_vis = fdf[~fdf["stable_point_key"].isin(hidden_keys)]
-    elif hidden_ids:
-        fdf_vis = fdf[~fdf["point_id"].isin(hidden_ids)]
-    else:
-        fdf_vis = fdf
+    fdf_vis = _filtrar_ocultos(fdf, HIDDEN_SCOPE)
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -506,7 +568,9 @@ def render(fdf: pd.DataFrame, sel_var: str, sel_lbl: str):
 
     resumen_filas = []
     for nombre_par, par in pares.items():
-        motor_x, motor_y, motor_df = obtener_puntos_motor(fdf_vis, sel_var, par.var_x, par.var_y)
+        # ocultos especificos de ESTE par (los de vista/global ya no estan en fdf_vis)
+        fdf_par = _filtrar_ocultos(fdf_vis, _scope_par(nombre_par))
+        motor_x, motor_y, motor_df = obtener_puntos_motor(fdf_par, sel_var, par.var_x, par.var_y)
         fig, n_dentro, n_fuera, ids_fuera = graficar_par(par, motor_x, motor_y, motor_df, grado, n_sigma)
 
         st.plotly_chart(fig, use_container_width=True,
@@ -524,7 +588,7 @@ def render(fdf: pd.DataFrame, sel_var: str, sel_lbl: str):
             raw_x = mapeo.get(par.var_x)
             raw_y = mapeo.get(par.var_y)
             tabla_fuera = (
-                fdf_vis[fdf_vis["point_id"].isin(ids_fuera) & fdf_vis["raw_name"].isin([raw_x, raw_y])]
+                fdf_par[fdf_par["point_id"].isin(ids_fuera) & fdf_par["raw_name"].isin([raw_x, raw_y])]
                 [cols_tabla_datos]
                 .rename(columns={"fecha_iso": "fecha"})
                 .sort_values(["consecutivo", "param_label"])

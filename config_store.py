@@ -290,7 +290,13 @@ def list_anom_statuses(db_path=CONFIG_DB):
 # PUNTOS OCULTOS EN VISTAS COMPARATIVAS (ej. Correlacion Ref.)
 # No borra nada de motores.db: marca stable_point_key cuando esta disponible,
 # y conserva point_id como compatibilidad con datos anteriores.
+#
+# El scope define el alcance del ocultamiento:
+#   - 'correlacion_ref'              -> toda la vista Correlacion Ref.
+#   - 'correlacion_ref::<par>'       -> solo ese par (ej. 'correlacion_ref::N1R vs EGTR')
+#   - GLOBAL_HIDDEN_SCOPE ('global') -> toda la app (lo filtra app.py al cargar)
 # ===========================================================================
+GLOBAL_HIDDEN_SCOPE = "global"
 def hide_point(point_id, scope="correlacion_ref", reason="", stable_point_key=None, db_path=CONFIG_DB):
     """Oculta un punto. Prefiere stable_point_key; point_id queda como fallback."""
     from datetime import datetime as _dt
