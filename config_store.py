@@ -376,6 +376,69 @@ def list_hidden_points_detail(scope="correlacion_ref", db_path=CONFIG_DB):
     ]
 
 
+# ===========================================================================
+# CUARENTENA DE EXCELES (trazabilidad de archivos retirados del dashboard)
+# Los Excel de origen son la evidencia primaria de cada punto: nunca se
+# borran, se mueven a una carpeta de cuarentena y aqui queda el registro.
+# ===========================================================================
+def _ensure_quarantine_table(con):
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS excel_quarantine_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_file       TEXT NOT NULL,
+            original_path     TEXT,
+            quarantine_path   TEXT,
+            point_ids         TEXT,  -- ids separados por coma
+            stable_point_keys TEXT,  -- llaves separadas por coma
+            reason            TEXT,
+            created_at        TEXT
+        )
+    """)
+
+
+def log_excel_quarantine(source_file, original_path, quarantine_path,
+                         point_ids=None, stable_point_keys=None, reason="",
+                         db_path=CONFIG_DB):
+    """Registra un Excel movido a cuarentena y los puntos retirados con el."""
+    from datetime import datetime as _dt
+    con = _con(db_path)
+    _ensure_quarantine_table(con)
+    con.execute("""
+        INSERT INTO excel_quarantine_log
+            (source_file, original_path, quarantine_path, point_ids,
+             stable_point_keys, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        source_file, original_path, quarantine_path,
+        ",".join(str(p) for p in point_ids) if point_ids else None,
+        ",".join(str(k) for k in stable_point_keys if k) if stable_point_keys else None,
+        reason, _dt.now().isoformat(timespec="seconds"),
+    ))
+    con.commit()
+    con.close()
+
+
+def list_excel_quarantine(db_path=CONFIG_DB):
+    """Historial de cuarentena, mas reciente primero. Lista de dicts."""
+    con = _con(db_path)
+    _ensure_quarantine_table(con)
+    rows = con.execute("""
+        SELECT id, source_file, original_path, quarantine_path, point_ids,
+               stable_point_keys, reason, created_at
+        FROM excel_quarantine_log ORDER BY id DESC
+    """).fetchall()
+    con.close()
+    return [
+        {
+            "id": r[0], "source_file": r[1], "original_path": r[2],
+            "quarantine_path": r[3], "point_ids": r[4] or "",
+            "stable_point_keys": r[5] or "", "reason": r[6] or "",
+            "created_at": r[7],
+        }
+        for r in rows
+    ]
+
+
 if __name__ == "__main__":
     # Prueba rapida
     set_threshold("1B", "EGTR2 [degC]", "TEST 003 : TAKE-OFF", 700.0, 850.0)

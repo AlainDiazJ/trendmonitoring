@@ -225,10 +225,25 @@ def delete_test_point(db_path, point_id):
         con.close()
 
 
-def delete_source_excels(source_files, source_folder):
-    """Borra los Excel de origen asociados a los puntos seleccionados."""
+QUARANTINE_DIR = "quarantine"
+
+
+def quarantine_source_excels(source_files, source_folder, quarantine_root=QUARANTINE_DIR):
+    """Mueve los Excel de origen a una carpeta de cuarentena (NO los borra).
+
+    Los Excel son la evidencia primaria de cada punto; retirarlos del
+    dashboard no debe destruirlos. Quedan en quarantine/AAAA-MM-DD/ junto a
+    la app, y el registro de la accion se guarda en config.db
+    (excel_quarantine_log).
+
+    Devuelve (moved, missing, errors); moved es lista de (origen, destino).
+    """
+    import shutil
+    from datetime import datetime
+
     folder = Path(source_folder).expanduser()
-    deleted = []
+    dest_dir = Path(quarantine_root).expanduser() / datetime.now().strftime("%Y-%m-%d")
+    moved = []
     missing = []
     errors = []
 
@@ -239,14 +254,20 @@ def delete_source_excels(source_files, source_folder):
         path = src if src.is_absolute() else folder / src.name
         try:
             if path.exists() and path.is_file():
-                path.unlink()
-                deleted.append(str(path))
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest = dest_dir / path.name
+                seq = 1
+                while dest.exists():
+                    dest = dest_dir / f"{path.stem}_{seq}{path.suffix}"
+                    seq += 1
+                shutil.move(str(path), str(dest))
+                moved.append((str(path), str(dest)))
             else:
                 missing.append(str(path))
         except Exception as e:
             errors.append(f"{path}: {e}")
 
-    return deleted, missing, errors
+    return moved, missing, errors
 
 
 _db_mtime = Path(DB_PATH).stat().st_mtime if Path(DB_PATH).exists() else None
@@ -1122,15 +1143,16 @@ if active_tab == "Correlacion Ref.":
 if active_tab == "Datos":
     st.subheader("Datos filtrados")
     st.caption(
-        "Selecciona una fila de la tabla y usa el boton para borrar el punto "
-        "completo al que pertenece esa medicion."
+        "Selecciona una fila de la tabla y usa el boton para retirar el punto "
+        "completo al que pertenece esa medicion. El Excel de origen NO se "
+        f"borra: se mueve a la carpeta '{QUARANTINE_DIR}/' junto a la app."
     )
     source_folder = st.text_input(
         "Carpeta donde estan los Excel de origen",
         value=st.session_state.get("source_excel_folder", ""),
         key="source_excel_folder",
         placeholder=r"C:\ruta\a\carpeta_de_pruebas",
-        help="Se usa para borrar el archivo indicado en source_file.",
+        help="De ahi se toma el archivo indicado en source_file para moverlo a cuarentena.",
     )
 
     cols = ["point_id", "consecutivo", "description", "fecha_iso", "date_parse_status",
@@ -1157,21 +1179,38 @@ if active_tab == "Datos":
             f"Exceles asociados: {len(source_files)}."
         )
         st.caption(
-            "Se borraran los puntos completos asociados a las filas seleccionadas, "
-            "sus mediciones y los Excel de origen encontrados en la carpeta indicada."
+            "Se retiraran de la base los puntos completos asociados a las filas "
+            "seleccionadas (con sus mediciones) y sus Excel de origen se moveran "
+            "a cuarentena. Nada se destruye: el Excel se puede restaurar a mano."
+        )
+        motivo_retiro = st.text_input(
+            "Motivo del retiro (queda en el registro de cuarentena)",
+            key="quarantine_reason",
+            placeholder="Ej: punto capturado con celda descalibrada",
         )
         puede_borrar = bool(source_folder.strip())
         if not puede_borrar:
-            st.caption("Indica la carpeta de Exceles para habilitar el borrado.")
-        if st.button("Borrar puntos seleccionados y Exceles", type="primary",
+            st.caption("Indica la carpeta de Exceles para habilitar el retiro.")
+        if st.button("Retirar puntos y mover Exceles a cuarentena", type="primary",
                      disabled=not puede_borrar):
             try:
-                deleted_files, missing_files, file_errors = delete_source_excels(
+                # 1) primero se pone a salvo la evidencia (mover Excel);
+                # 2) luego se retiran los puntos de la base;
+                # 3) al final se registra todo en config.db.
+                moved_files, missing_files, file_errors = quarantine_source_excels(
                     source_files, source_folder,
                 )
                 if file_errors:
-                    st.error("No se pudieron borrar algunos Excel: " + " | ".join(file_errors))
+                    st.error("No se pudieron mover algunos Excel: " + " | ".join(file_errors))
                     st.stop()
+
+                # puntos/llaves asociados a cada Excel, para el registro
+                sel_puntos = (
+                    fdf[fdf["point_id"].isin(punto_ids)]
+                    [["point_id", "stable_point_key", "source_file"]]
+                    .drop_duplicates("point_id")
+                )
+
                 total_points = 0
                 total_meas = 0
                 for punto_id in punto_ids:
@@ -1179,23 +1218,60 @@ if active_tab == "Datos":
                     total_points += n_points
                     total_meas += n_meas
                 load_data.clear()
+
+                destino_por_origen = dict(moved_files)
+                for source_file in source_files:
+                    src = Path(str(source_file))
+                    path = src if src.is_absolute() else Path(source_folder).expanduser() / src.name
+                    afectados = sel_puntos[sel_puntos["source_file"].astype(str) == str(source_file)]
+                    cfg.log_excel_quarantine(
+                        source_file=str(source_file),
+                        original_path=str(path),
+                        quarantine_path=destino_por_origen.get(str(path)),
+                        point_ids=afectados["point_id"].tolist(),
+                        stable_point_keys=afectados["stable_point_key"].tolist(),
+                        reason=motivo_retiro.strip(),
+                    )
+
                 if total_points:
                     st.success(
-                        f"Se borraron {total_points} punto(s), {total_meas} mediciones "
-                        f"y {len(deleted_files)} Excel(es)."
+                        f"Se retiraron {total_points} punto(s), {total_meas} mediciones. "
+                        f"{len(moved_files)} Excel(es) movidos a cuarentena."
                     )
                     if missing_files:
                         st.warning(
-                            "No se encontraron estos Excel: " + " | ".join(missing_files)
+                            "No se encontraron estos Excel (los puntos si se retiraron): "
+                            + " | ".join(missing_files)
                         )
                     st.rerun()
                 else:
                     st.warning("No se encontraron esos puntos en la base.")
             except Exception as e:
-                st.error(f"No se pudieron borrar los puntos: {e}")
+                st.error(f"No se pudieron retirar los puntos: {e}")
     else:
         st.caption("No hay ninguna fila seleccionada.")
     st.caption(f"{len(fdf)} mediciones - {sel_lbl}")
+
+    # ---- Historial de cuarentena ----
+    historial_q = cfg.list_excel_quarantine()
+    if historial_q:
+        with st.expander(f"Historial de cuarentena ({len(historial_q)} registro(s))",
+                         expanded=False):
+            st.caption(
+                "Exceles retirados del dashboard. El archivo sigue en la ruta "
+                "de cuarentena indicada; para reincorporarlo, muevelo de vuelta "
+                "a la carpeta de origen y vuelve a correr el ETL."
+            )
+            st.dataframe(
+                pd.DataFrame(historial_q)[
+                    ["created_at", "source_file", "quarantine_path", "point_ids", "reason"]
+                ].rename(columns={
+                    "created_at": "Fecha", "source_file": "Archivo",
+                    "quarantine_path": "Ruta cuarentena", "point_ids": "point_id(s)",
+                    "reason": "Motivo",
+                }),
+                use_container_width=True, hide_index=True,
+            )
 
 
 # ===== ANOMALIAS (vista consolidada de todo lo que merece revision) =====
