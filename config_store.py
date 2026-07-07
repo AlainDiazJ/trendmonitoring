@@ -383,6 +383,96 @@ def list_hidden_points_detail(scope="correlacion_ref", db_path=CONFIG_DB):
 
 
 # ===========================================================================
+# PERFILES DE BASELINE APROBADOS
+# Un baseline aprobado congela formalmente que rango de fechas se considera
+# "normal" para (variante, parametro, description), junto con la media y
+# sigma calculadas en ese momento. Las bandas y anomalias que lo usan quedan
+# ancladas a esos valores congelados: no cambian al ocultar puntos, recargar
+# datos ni mover filtros. Eso convierte las bandas de control de algo
+# exploratorio a algo defendible y compartido entre usuarios.
+# ===========================================================================
+def _ensure_baseline_table(con):
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS baseline_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL UNIQUE,
+            variant     TEXT NOT NULL,
+            param_label TEXT NOT NULL,
+            description TEXT NOT NULL,
+            date_from   TEXT NOT NULL,  -- ISO yyyy-mm-dd
+            date_to     TEXT NOT NULL,  -- ISO yyyy-mm-dd
+            mean        REAL,
+            sigma       REAL,
+            n_points    INTEGER,
+            approved_by TEXT,
+            approved_at TEXT,
+            notes       TEXT
+        )
+    """)
+
+
+def save_baseline_profile(name, variant, param_label, description,
+                          date_from, date_to, mean, sigma, n_points,
+                          approved_by="", notes="", db_path=CONFIG_DB):
+    """Guarda (o reemplaza, por nombre) un perfil de baseline aprobado."""
+    from datetime import datetime as _dt
+    con = _con(db_path)
+    _ensure_baseline_table(con)
+    con.execute("""
+        INSERT INTO baseline_profiles
+            (name, variant, param_label, description, date_from, date_to,
+             mean, sigma, n_points, approved_by, approved_at, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            variant=excluded.variant, param_label=excluded.param_label,
+            description=excluded.description, date_from=excluded.date_from,
+            date_to=excluded.date_to, mean=excluded.mean, sigma=excluded.sigma,
+            n_points=excluded.n_points, approved_by=excluded.approved_by,
+            approved_at=excluded.approved_at, notes=excluded.notes
+    """, (name, variant, param_label, description, date_from, date_to,
+          mean, sigma, n_points, approved_by,
+          _dt.now().isoformat(timespec="seconds"), notes))
+    con.commit()
+    con.close()
+
+
+def list_baseline_profiles(variant=None, param_label=None, description=None,
+                           db_path=CONFIG_DB):
+    """Perfiles aprobados, mas reciente primero. Filtros opcionales exactos."""
+    con = _con(db_path)
+    _ensure_baseline_table(con)
+    q = ("SELECT id, name, variant, param_label, description, date_from, date_to, "
+         "mean, sigma, n_points, approved_by, approved_at, notes "
+         "FROM baseline_profiles WHERE 1=1")
+    args = []
+    for campo, valor in (("variant", variant), ("param_label", param_label),
+                         ("description", description)):
+        if valor is not None:
+            q += f" AND {campo}=?"
+            args.append(valor)
+    q += " ORDER BY approved_at DESC, id DESC"
+    rows = con.execute(q, args).fetchall()
+    con.close()
+    return [
+        {
+            "id": r[0], "name": r[1], "variant": r[2], "param_label": r[3],
+            "description": r[4], "date_from": r[5], "date_to": r[6],
+            "mean": r[7], "sigma": r[8], "n_points": r[9],
+            "approved_by": r[10] or "", "approved_at": r[11], "notes": r[12] or "",
+        }
+        for r in rows
+    ]
+
+
+def delete_baseline_profile(profile_id, db_path=CONFIG_DB):
+    con = _con(db_path)
+    _ensure_baseline_table(con)
+    con.execute("DELETE FROM baseline_profiles WHERE id=?", (int(profile_id),))
+    con.commit()
+    con.close()
+
+
+# ===========================================================================
 # CUARENTENA DE EXCELES (trazabilidad de archivos retirados del dashboard)
 # Los Excel de origen son la evidencia primaria de cada punto: nunca se
 # borran, se mueven a una carpeta de cuarentena y aqui queda el registro.

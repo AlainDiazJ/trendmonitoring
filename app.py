@@ -494,9 +494,11 @@ if active_tab == "Tendencia":
             n_sigma = st.slider("N (sigma)", min_value=1, max_value=6, value=3, step=1)
             baseline_modo = st.selectbox(
                 "Baseline estadistico",
-                ["Historico completo", "Visible", "Rango manual"],
+                ["Historico completo", "Visible", "Rango manual", "Baseline aprobado"],
                 index=0,
-                help="Define de donde salen media y sigma. La ventana visible solo controla lo que ves.",
+                help="Define de donde salen media y sigma. La ventana visible solo "
+                     "controla lo que ves. 'Baseline aprobado' usa media/sigma "
+                     "congeladas de un perfil guardado.",
                 key="baseline_modo_tend",
             )
             baseline_fechas = None
@@ -510,6 +512,39 @@ if active_tab == "Tendencia":
                         max_value=_bf.max().date(),
                         key="baseline_fechas_tend",
                     )
+
+            baseline_perfil = None
+            if baseline_modo == "Baseline aprobado":
+                _desc_perfil = sel_desc[0] if len(sel_desc) == 1 else None
+                perfiles = cfg.list_baseline_profiles(
+                    variant=sel_var, param_label=p_sel, description=_desc_perfil,
+                )
+                if not perfiles:
+                    st.caption(
+                        "No hay baselines aprobados para este parametro"
+                        + ("" if _desc_perfil else " (filtra a UN solo Description)")
+                        + ". Se usa historico completo. Guarda uno abajo."
+                    )
+                else:
+                    _nombre_perfil = st.selectbox(
+                        "Perfil aprobado", [p["name"] for p in perfiles],
+                        key="baseline_perfil_tend",
+                    )
+                    baseline_perfil = next(
+                        p for p in perfiles if p["name"] == _nombre_perfil
+                    )
+                    st.caption(
+                        f"media {baseline_perfil['mean']:.3f} - "
+                        f"sigma {baseline_perfil['sigma']:.3f} - "
+                        f"{baseline_perfil['n_points']} puntos - "
+                        f"{baseline_perfil['date_from']} a {baseline_perfil['date_to']} - "
+                        f"aprobado por {baseline_perfil['approved_by'] or '(sin nombre)'}"
+                    )
+                    if baseline_perfil["notes"]:
+                        st.caption(f"Nota: {baseline_perfil['notes']}")
+                    if st.button("Borrar este baseline", key="baseline_perfil_del"):
+                        cfg.delete_baseline_profile(baseline_perfil["id"])
+                        st.rerun()
 
         with st.sidebar.expander("Tendencia / regresion", expanded=False):
             mostrar_reg = st.checkbox("Linea de tendencia (regresion)", value=False)
@@ -539,6 +574,71 @@ if active_tab == "Tendencia":
                 base = base[(base["fecha"].dt.date >= d0b) & (base["fecha"].dt.date <= d1b)]
                 return base, f"rango manual {d0b.isoformat()} a {d1b.isoformat()}"
             return base, "historico completo"
+
+        def stats_baseline(param_label, desc, visible_df):
+            """Devuelve (media, sigma, n, label) segun el baseline activo,
+            o None si no hay suficientes datos.
+
+            Con un baseline aprobado se usan los valores CONGELADOS del
+            perfil (no se recalculan): las bandas quedan ancladas a lo que
+            se aprobo, aunque cambien filtros u ocultamientos. Sin perfil
+            seleccionado, cae a historico completo.
+            """
+            if baseline_modo == "Baseline aprobado" and baseline_perfil is not None:
+                if baseline_perfil["mean"] is not None and baseline_perfil["sigma"] is not None:
+                    return (
+                        float(baseline_perfil["mean"]),
+                        float(baseline_perfil["sigma"]),
+                        int(baseline_perfil["n_points"] or 0),
+                        f"baseline aprobado: {baseline_perfil['name']}",
+                    )
+            base, label = obtener_base_calc(param_label, desc, visible_df)
+            vals = base["value"].astype(float).dropna()
+            if len(vals) < 2:
+                return None
+            return float(vals.mean()), float(vals.std(ddof=1)), len(vals), label
+
+        # ---- Guardar la seleccion actual como baseline aprobado ----
+        with st.sidebar.expander("Guardar baseline aprobado", expanded=False):
+            if not un_solo_desc:
+                st.caption("Filtra a UN solo Description para guardar un baseline.")
+            else:
+                base_bp, label_bp = obtener_base_calc(p_sel, sel_desc[0], sub)
+                vals_bp = base_bp["value"].astype(float).dropna()
+                fechas_bp = base_bp["fecha"].dropna()
+                if len(vals_bp) < 2 or fechas_bp.empty:
+                    st.caption("No hay suficientes puntos (minimo 2, con fecha) "
+                               "en la seleccion actual de baseline.")
+                else:
+                    media_bp = float(vals_bp.mean())
+                    sigma_bp = float(vals_bp.std(ddof=1))
+                    d0_bp = fechas_bp.min().date().isoformat()
+                    d1_bp = fechas_bp.max().date().isoformat()
+                    st.caption(
+                        f"Se congelara la base actual ({label_bp}): "
+                        f"media {media_bp:.3f}, sigma {sigma_bp:.3f}, "
+                        f"{len(vals_bp)} puntos, {d0_bp} a {d1_bp}."
+                    )
+                    nombre_bp = st.text_input(
+                        "Nombre del baseline",
+                        value=f"Baseline {p_sel.split(' ')[0]} {sel_desc[0]} {sel_lbl} {d1_bp[:4]}",
+                        key="bp_name",
+                    )
+                    aprobado_por_bp = st.text_input("Aprobado por", key="bp_by")
+                    notas_bp = st.text_area("Comentario", key="bp_notes", height=68,
+                                            placeholder="Ej: periodo estable antes de recalibracion")
+                    if st.button("Guardar baseline aprobado", key="bp_save"):
+                        if nombre_bp.strip():
+                            cfg.save_baseline_profile(
+                                nombre_bp.strip(), sel_var, p_sel, sel_desc[0],
+                                d0_bp, d1_bp, media_bp, sigma_bp, len(vals_bp),
+                                approved_by=aprobado_por_bp.strip(),
+                                notes=notas_bp.strip(),
+                            )
+                            st.success("Baseline aprobado guardado.")
+                            st.rerun()
+                        else:
+                            st.warning("El nombre es obligatorio.")
 
         # ---- Umbrales fijos (limites manuales) por variante+parametro+description ----
         with st.sidebar.expander("Umbrales fijos (limites)", expanded=False):
@@ -589,12 +689,10 @@ if active_tab == "Tendencia":
                 st.info("Para mostrar bandas, filtra a UN solo Description en la barra "
                         "lateral (mezclar ratings distintos da una media sin sentido).")
             else:
-                # datos para calcular media/sigma desde baseline elegido
-                base_calc, baseline_label = obtener_base_calc(p_sel, sel_desc[0], sub)
-                vals = base_calc["value"].astype(float).dropna()
-                if len(vals) >= 2:
-                    media = vals.mean()
-                    sigma = vals.std(ddof=1)  # sigma muestral
+                # media/sigma desde el baseline elegido (congeladas si es aprobado)
+                stats_b = stats_baseline(p_sel, sel_desc[0], sub)
+                if stats_b is not None:
+                    media, sigma, n_base, baseline_label = stats_b
                     ucl = media + n_sigma * sigma
                     lcl = media - n_sigma * sigma
 
@@ -624,7 +722,7 @@ if active_tab == "Tendencia":
                         f"Media = {media:.3f} - sigma = {sigma:.3f} - "
                         f"+/-{n_sigma}sigma -> [{lcl:.3f}, {ucl:.3f}] - "
                         f"base: {baseline_label} "
-                        f"({len(vals)} puntos) - "
+                        f"({n_base} puntos) - "
                         f"{len(fuera) if un_solo_desc else 0} fuera de banda"
                     )
                 else:
@@ -760,13 +858,14 @@ if active_tab == "Tendencia":
 
             if len(serie) >= 3:
                 # base de media/sigma: baseline elegido si hay un solo Description
-                if un_solo_desc:
-                    base_calc_d, _baseline_label_d = obtener_base_calc(p_sel, sel_desc[0], sub)
-                    base_d = base_calc_d["value"].astype(float)
+                # (congelada si es un baseline aprobado)
+                stats_d = stats_baseline(p_sel, sel_desc[0], sub) if un_solo_desc else None
+                if stats_d is not None:
+                    mu, sd, _n_d, _lbl_d = stats_d
                 else:
-                    base_d = serie
-                mu = base_d.mean()
-                sd = base_d.std(ddof=1) if base_d.std(ddof=1) > 0 else 1.0
+                    mu = serie.mean()
+                    sd = serie.std(ddof=1)
+                sd = sd if sd and sd > 0 else 1.0
 
                 # CUSUM tabular (acumula desviaciones normalizadas)
                 k = cusum_k  # holgura en sigmas
@@ -855,17 +954,15 @@ if active_tab == "Tendencia":
         # ---- Deteccion automatica de outliers (lista) ----
         if mostrar_bandas and un_solo_desc:
             # recalcular base igual que arriba para listar
-            base_calc, baseline_label = obtener_base_calc(p_sel, sel_desc[0], sub)
-            vals = base_calc["value"].astype(float).dropna()
-            if len(vals) >= 2:
-                media = vals.mean()
-                sigma = vals.std(ddof=1)
+            stats_o = stats_baseline(p_sel, sel_desc[0], sub)
+            if stats_o is not None:
+                media, sigma, _n_o, baseline_label = stats_o
                 ucl = media + n_sigma * sigma
                 lcl = media - n_sigma * sigma
                 fuera = sub[(sub["value"] > ucl) | (sub["value"] < lcl)].copy()
                 st.markdown(f"**Outliers detectados (fuera de +/-{n_sigma}sigma): {len(fuera)}**")
                 if not fuera.empty:
-                    fuera["desviacion_sigma"] = (fuera["value"] - media) / sigma
+                    fuera["desviacion_sigma"] = (fuera["value"] - media) / (sigma if sigma > 0 else float("nan"))
                     tabla = fuera[["consecutivo", "description", "test_date",
                                    "value", "desviacion_sigma"]].copy()
                     tabla = tabla.rename(columns={
@@ -885,11 +982,9 @@ if active_tab == "Tendencia":
         stats_export = {}
         stats_grafica = None
         if un_solo_desc:
-            base_calc, baseline_label_export = obtener_base_calc(p_sel, sel_desc[0], sub)
-            vals_e = base_calc["value"].astype(float).dropna()
-            if len(vals_e) >= 2:
-                media_e = vals_e.mean()
-                sigma_e = vals_e.std(ddof=1)
+            stats_e = stats_baseline(p_sel, sel_desc[0], sub)
+            if stats_e is not None:
+                media_e, sigma_e, n_e, baseline_label_export = stats_e
                 ucl_e = media_e + n_sigma * sigma_e
                 lcl_e = media_e - n_sigma * sigma_e
                 fuera_e = sub[(sub["value"] > ucl_e) | (sub["value"] < lcl_e)]
@@ -897,7 +992,7 @@ if active_tab == "Tendencia":
                     "Media": round(media_e, 4), "Sigma": round(sigma_e, 4),
                     f"+{n_sigma}sigma (UCL)": round(ucl_e, 4),
                     f"-{n_sigma}sigma (LCL)": round(lcl_e, 4),
-                    "N puntos (base)": len(vals_e),
+                    "N puntos (base)": n_e,
                     "Outliers (visibles)": len(fuera_e),
                     "Base de calculo": baseline_label_export,
                 }
@@ -924,6 +1019,12 @@ if active_tab == "Tendencia":
         if baseline_modo == "Rango manual" and isinstance(baseline_fechas, tuple) and len(baseline_fechas) == 2:
             baseline_export_txt = (
                 f"Rango manual {baseline_fechas[0].isoformat()} a {baseline_fechas[1].isoformat()}"
+            )
+        elif baseline_modo == "Baseline aprobado" and baseline_perfil is not None:
+            baseline_export_txt = (
+                f"Baseline aprobado '{baseline_perfil['name']}' "
+                f"({baseline_perfil['date_from']} a {baseline_perfil['date_to']}, "
+                f"aprobado por {baseline_perfil['approved_by'] or 'sin nombre'})"
             )
         eventos_txt = (
             "; ".join(f"{ev[2]} - {ev[1]}" for ev in eventos_export)
@@ -1317,10 +1418,12 @@ if active_tab == "Anomalias":
     with st.expander("Baseline de deteccion", expanded=False):
         baseline_modo_a = st.selectbox(
             "Baseline estadistico para anomalias",
-            ["Historico completo", "Visible", "Rango manual"],
+            ["Historico completo", "Visible", "Rango manual", "Baseline aprobado"],
             index=0,
             key="baseline_modo_anom",
-            help="Media/sigma para outliers y CUSUM. La lista de anomalias sigue respetando los filtros visibles.",
+            help="Media/sigma para outliers y CUSUM. La lista de anomalias sigue "
+                 "respetando los filtros visibles. 'Baseline aprobado' usa los "
+                 "perfiles congelados donde existan; el resto usa historico completo.",
         )
         baseline_fechas_a = None
         if baseline_modo_a == "Rango manual":
@@ -1359,6 +1462,28 @@ if active_tab == "Anomalias":
                         "n": len(vals),
                         "label": label,
                     }
+        # Baseline aprobado: donde exista un perfil congelado para
+        # (parametro, description), sus media/sigma REEMPLAZAN a las
+        # calculadas; las combinaciones sin perfil conservan el historico.
+        if baseline_modo_a == "Baseline aprobado":
+            n_perfiles = 0
+            vistos = set()
+            for perfil in cfg.list_baseline_profiles(variant=sel_var):
+                clave = (perfil["param_label"], perfil["description"])
+                if clave in vistos:
+                    continue  # la lista viene mas reciente primero
+                vistos.add(clave)
+                if perfil["mean"] is None or not perfil["sigma"] or perfil["sigma"] <= 0:
+                    continue
+                out[clave] = {
+                    "mu": float(perfil["mean"]),
+                    "sd": float(perfil["sigma"]),
+                    "n": int(perfil["n_points"] or 0),
+                    "label": f"aprobado: {perfil['name']}",
+                }
+                n_perfiles += 1
+            label = (f"baseline aprobado ({n_perfiles} perfil(es); "
+                     "resto historico completo)")
         return out, label, len(base[["point_id", "param_label"]].drop_duplicates())
 
     baseline_stats_a, baseline_label_a, baseline_n_a = construir_baseline_stats_anom()
