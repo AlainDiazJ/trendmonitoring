@@ -26,6 +26,7 @@ import streamlit as st
 
 import config_store as cfg
 import correlacion_ref
+from db_migrations import ensure_schema_and_backfill
 
 DB_PATH = "data/motores.db"
 
@@ -128,6 +129,10 @@ def load_data(db_path, db_mtime=None):
     # db_mtime solo participa en la clave de cache: invalida al cambiar motores.db.
     if not Path(db_path).exists():
         return None
+    # Bases viejas: agrega columnas nuevas y rellena stable_point_key / fechas
+    # ISO ANTES del SELECT, que ya asume ese schema. Idempotente: en una base
+    # al dia no toca nada.
+    ensure_schema_and_backfill(db_path)
     con = sqlite3.connect(db_path)
     df = pd.read_sql_query("""
         SELECT
