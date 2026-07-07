@@ -130,6 +130,18 @@ def render(filtros):
                     )
                     if baseline_perfil["notes"]:
                         st.caption(f"Nota: {baseline_perfil['notes']}")
+                    if baseline_perfil["sigma"] is None or baseline_perfil["sigma"] <= 0:
+                        st.error(
+                            "Este baseline tiene sigma invalida (<= 0): se "
+                            "IGNORA y las bandas usan historico completo. "
+                            "Revisalo o borralo."
+                        )
+                    elif (baseline_perfil["n_points"] or 0) < 10:
+                        st.warning(
+                            f"Baseline con solo {baseline_perfil['n_points']} "
+                            "punto(s): media/sigma poco robustas. Usalo con "
+                            "reserva o aprueba uno con mas historial."
+                        )
                     if st.button("Borrar este baseline", key="baseline_perfil_del"):
                         cfg.delete_baseline_profile(baseline_perfil["id"])
                         st.rerun()
@@ -173,7 +185,12 @@ def render(filtros):
             seleccionado, cae a historico completo.
             """
             if baseline_modo == "Baseline aprobado" and baseline_perfil is not None:
-                if baseline_perfil["mean"] is not None and baseline_perfil["sigma"] is not None:
+                # sigma <= 0 seria un baseline degenerado (bandas de ancho
+                # cero -> todo marcado como outlier); se ignora y se cae al
+                # historico. La UI ya avisa con st.error al seleccionarlo.
+                if (baseline_perfil["mean"] is not None
+                        and baseline_perfil["sigma"] is not None
+                        and baseline_perfil["sigma"] > 0):
                     return (
                         float(baseline_perfil["mean"]),
                         float(baseline_perfil["sigma"]),
@@ -207,6 +224,18 @@ def render(filtros):
                         f"media {media_bp:.3f}, sigma {sigma_bp:.3f}, "
                         f"{len(vals_bp)} puntos, {d0_bp} a {d1_bp}."
                     )
+                    if len(vals_bp) < 10:
+                        st.warning(
+                            f"Solo {len(vals_bp)} punto(s) en la base: el "
+                            "baseline quedara poco robusto. Se puede guardar, "
+                            "pero considera un rango con mas historial."
+                        )
+                    if sigma_bp <= 0:
+                        st.warning(
+                            "Sigma de la base actual es 0 (todos los valores "
+                            "identicos): las bandas de este baseline no seran "
+                            "utilizables."
+                        )
                     nombre_bp = st.text_input(
                         "Nombre del baseline",
                         value=f"Baseline {p_sel.split(' ')[0]} {sel_desc[0]} {sel_lbl} {d1_bp[:4]}",

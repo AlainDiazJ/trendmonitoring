@@ -69,12 +69,41 @@ def render(filtros):
             key="quarantine_reason",
             placeholder="Ej: punto capturado con celda descalibrada",
         )
+        permitir_sin_excel = st.checkbox(
+            "Permitir retirar puntos aunque no se encuentre su Excel de origen",
+            value=False,
+            key="quarantine_allow_missing",
+            help="Por default el retiro se BLOQUEA si falta cualquier Excel: el "
+                 "archivo es la evidencia primaria del punto y no se retira el "
+                 "registro sin ponerla antes en cuarentena. Marca esta casilla "
+                 "solo si el Excel ya no existe (p. ej. se borro historicamente).",
+        )
         puede_borrar = bool(source_folder.strip())
         if not puede_borrar:
             st.caption("Indica la carpeta de Exceles para habilitar el retiro.")
         if st.button("Retirar puntos y mover Exceles a cuarentena", type="primary",
                      disabled=not puede_borrar):
             try:
+                # 0) verificacion previa (all-or-nothing): si falta CUALQUIER
+                # Excel y no hay autorizacion explicita, no se toca nada:
+                # ni archivos ni base.
+                folder_q = Path(source_folder).expanduser()
+                faltantes_previos = []
+                for source_file in source_files:
+                    src_q = Path(str(source_file))
+                    ruta_q = src_q if src_q.is_absolute() else folder_q / src_q.name
+                    if not (ruta_q.exists() and ruta_q.is_file()):
+                        faltantes_previos.append(str(ruta_q))
+                if faltantes_previos and not permitir_sin_excel:
+                    st.error(
+                        "Retiro BLOQUEADO: no se encontraron estos Excel de origen: "
+                        + " | ".join(faltantes_previos)
+                        + ". No se retiro ningun punto ni se movio ningun archivo. "
+                        "Corrige la carpeta de Exceles, o marca la casilla de "
+                        "arriba para retirar sin asegurar la evidencia."
+                    )
+                    st.stop()
+
                 # 1) primero se pone a salvo la evidencia (mover Excel);
                 # 2) luego se retiran los puntos de la base;
                 # 3) al final se registra todo en config.db.
@@ -121,8 +150,9 @@ def render(filtros):
                     )
                     if missing_files:
                         st.warning(
-                            "No se encontraron estos Excel (los puntos si se retiraron): "
-                            + " | ".join(missing_files)
+                            "Estos Excel no se encontraron y sus puntos se "
+                            "retiraron SIN asegurar la evidencia (autorizado "
+                            "por la casilla): " + " | ".join(missing_files)
                         )
                     st.rerun()
                 else:

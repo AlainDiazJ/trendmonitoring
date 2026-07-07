@@ -28,6 +28,33 @@ def _ensure_hidden_points_stable_columns(con):
         con.execute("ALTER TABLE hidden_points ADD COLUMN migrated_from_point_id INTEGER")
 
 
+def _ensure_hidden_points_indexes(con):
+    """Dedupe + indices de hidden_points.
+
+    La PK sigue siendo (point_id, scope) por compatibilidad, pero la llave
+    real de un ocultamiento es (scope, stable_point_key): si se regenera
+    motores.db, el mismo punto vuelve con otro point_id y sin este indice se
+    acumularian filas duplicadas para la misma llave estable. Antes de crear
+    el indice unico se eliminan duplicados existentes (se conserva la fila
+    mas reciente).
+    """
+    con.execute("""
+        DELETE FROM hidden_points
+        WHERE stable_point_key IS NOT NULL
+          AND rowid NOT IN (
+              SELECT MAX(rowid) FROM hidden_points
+              WHERE stable_point_key IS NOT NULL
+              GROUP BY scope, stable_point_key
+          )
+    """)
+    con.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_hidden_scope_stable_key
+        ON hidden_points(scope, stable_point_key)
+        WHERE stable_point_key IS NOT NULL
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_hidden_scope ON hidden_points(scope)")
+
+
 def _con(db_path=CONFIG_DB):
     Path(db_path).parent.mkdir(parents=True, exist_ok=True) if Path(db_path).parent != Path("") else None
     con = sqlite3.connect(db_path)
@@ -61,6 +88,7 @@ def _con(db_path=CONFIG_DB):
         )
     """)
     _ensure_hidden_points_stable_columns(con)
+    _ensure_hidden_points_indexes(con)
     con.commit()
     return con
 
@@ -302,6 +330,14 @@ def hide_point(point_id, scope="correlacion_ref", reason="", stable_point_key=No
     from datetime import datetime as _dt
     con = _con(db_path)
     now = _dt.now().isoformat(timespec="seconds")
+    if stable_point_key:
+        # El mismo punto puede volver con otro point_id tras regenerar la
+        # base: se reemplaza cualquier fila previa de esta llave estable en
+        # este scope, para no violar idx_hidden_scope_stable_key.
+        con.execute(
+            "DELETE FROM hidden_points WHERE scope=? AND stable_point_key=? AND point_id<>?",
+            (scope, stable_point_key, int(point_id)),
+        )
     con.execute("""
         INSERT INTO hidden_points (point_id, scope, reason, created_at, stable_point_key, migrated_from_point_id)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -409,6 +445,10 @@ def _ensure_baseline_table(con):
             notes       TEXT
         )
     """)
+    con.execute("""
+        CREATE INDEX IF NOT EXISTS idx_baseline_lookup
+        ON baseline_profiles(variant, param_label, description)
+    """)
 
 
 def save_baseline_profile(name, variant, param_label, description,
@@ -489,6 +529,10 @@ def _ensure_quarantine_table(con):
             reason            TEXT,
             created_at        TEXT
         )
+    """)
+    con.execute("""
+        CREATE INDEX IF NOT EXISTS idx_quarantine_created
+        ON excel_quarantine_log(created_at)
     """)
 
 
