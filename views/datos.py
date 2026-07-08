@@ -104,17 +104,13 @@ def render(filtros):
                     )
                     st.stop()
 
-                # 1) primero se pone a salvo la evidencia (mover Excel);
-                # 2) luego se retiran los puntos de la base;
-                # 3) al final se registra todo en config.db.
-                moved_files, missing_files, file_errors = quarantine_source_excels(
-                    source_files, source_folder,
-                )
-                if file_errors:
-                    st.error("No se pudieron mover algunos Excel: " + " | ".join(file_errors))
-                    st.stop()
-
-                # puntos/llaves asociados a cada Excel, para el registro
+                # Se procesa un Excel a la vez y se registra el log
+                # INMEDIATAMENTE despues de mover cada archivo (antes de
+                # borrar sus puntos): si algo truena a medio proceso, todo
+                # archivo ya movido a cuarentena SIEMPRE tiene rastro en
+                # excel_quarantine_log, aunque sus puntos aun no se hayan
+                # retirado de motores.db (nunca queda evidencia movida sin
+                # registro, que era el riesgo real: perder la trazabilidad).
                 sel_puntos = (
                     fdf[fdf["point_id"].isin(punto_ids)]
                     [["point_id", "stable_point_key", "source_file"]]
@@ -123,24 +119,42 @@ def render(filtros):
 
                 total_points = 0
                 total_meas = 0
-                for punto_id in punto_ids:
-                    n_points, n_meas = delete_test_point(DB_PATH, punto_id)
-                    total_points += n_points
-                    total_meas += n_meas
-                load_data.clear()
-
-                destino_por_origen = dict(moved_files)
+                moved_files = []
+                missing_files = []
+                file_errors = []
                 for source_file in source_files:
+                    moved_i, missing_i, errors_i = quarantine_source_excels(
+                        [source_file], source_folder,
+                    )
+                    moved_files += moved_i
+                    missing_files += missing_i
+                    file_errors += errors_i
+                    if errors_i:
+                        continue  # no se movio: no hay nada que registrar ni borrar
+
                     src = Path(str(source_file))
                     path = src if src.is_absolute() else Path(source_folder).expanduser() / src.name
+                    destino = dict(moved_i).get(str(path))
                     afectados = sel_puntos[sel_puntos["source_file"].astype(str) == str(source_file)]
                     cfg.log_excel_quarantine(
                         source_file=str(source_file),
                         original_path=str(path),
-                        quarantine_path=destino_por_origen.get(str(path)),
+                        quarantine_path=destino,
                         point_ids=afectados["point_id"].tolist(),
                         stable_point_keys=afectados["stable_point_key"].tolist(),
                         reason=motivo_retiro.strip(),
+                    )
+
+                    for punto_id in afectados["point_id"].tolist():
+                        n_points, n_meas = delete_test_point(DB_PATH, int(punto_id))
+                        total_points += n_points
+                        total_meas += n_meas
+                load_data.clear()
+
+                if file_errors:
+                    st.error(
+                        "No se pudieron mover algunos Excel (sus puntos NO se "
+                        "retiraron): " + " | ".join(file_errors)
                     )
 
                 if total_points:

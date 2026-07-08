@@ -19,6 +19,13 @@ from pathlib import Path
 
 CONFIG_DB = "config.db"
 
+# Rutas (absolutas) de config.db donde ya se corrio el dedupe + creacion de
+# indices de hidden_points en este proceso. _con() abre una conexion nueva en
+# CADA llamada (una por funcion publica de este modulo), asi que sin este
+# guard el DELETE de dedupe (un table scan con GROUP BY) se repetiria decenas
+# de veces por rerun de Streamlit -- ver _ensure_hidden_points_indexes.
+_HIDDEN_POINTS_SCHEMA_READY = set()
+
 
 def _ensure_hidden_points_stable_columns(con):
     cols = {r[1] for r in con.execute("PRAGMA table_info(hidden_points)").fetchall()}
@@ -87,8 +94,11 @@ def _con(db_path=CONFIG_DB):
             PRIMARY KEY (point_id, scope)
         )
     """)
-    _ensure_hidden_points_stable_columns(con)
-    _ensure_hidden_points_indexes(con)
+    ruta_abs = str(Path(db_path).resolve())
+    if ruta_abs not in _HIDDEN_POINTS_SCHEMA_READY:
+        _ensure_hidden_points_stable_columns(con)
+        _ensure_hidden_points_indexes(con)
+        _HIDDEN_POINTS_SCHEMA_READY.add(ruta_abs)
     con.commit()
     return con
 
@@ -427,11 +437,77 @@ def list_hidden_points_detail(scope="correlacion_ref", db_path=CONFIG_DB):
 # datos ni mover filtros. Eso convierte las bandas de control de algo
 # exploratorio a algo defendible y compartido entre usuarios.
 # ===========================================================================
+def _migrar_baseline_unique_name_global(con):
+    """Si baseline_profiles existe con la constraint vieja UNIQUE(name) a
+    secas, la reconstruye con UNIQUE(name, variant, param_label,
+    description): un nombre de perfil (ej. 'Baseline 2024') solo debe ser
+    unico DENTRO de un mismo (variante, parametro, description), no en toda
+    la app; si no, guardar un perfil con un nombre ya usado para OTRO
+    parametro sobreescribia el perfil ajeno en silencio.
+
+    Si dos filas viejas colisionan bajo la constraint nueva (mismo name +
+    variant + param_label + description), se conserva la mas reciente
+    (id mayor).
+    """
+    existe = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='baseline_profiles'"
+    ).fetchone()
+    if not existe:
+        return
+    # PRAGMA index_list(t) -> filas (seq, name, unique, origin, partial):
+    # el flag "unique" es la columna 2 (0/1), NO el origin ('c'/'u'/'pk').
+    tiene_unique_global = any(
+        r[2] == 1 and [c[2] for c in con.execute(f"PRAGMA index_info({r[1]})")] == ["name"]
+        for r in con.execute("PRAGMA index_list(baseline_profiles)").fetchall()
+    )
+    if not tiene_unique_global:
+        return
+    con.execute("ALTER TABLE baseline_profiles RENAME TO baseline_profiles_old_unique_name")
+    con.execute("""
+        CREATE TABLE baseline_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            variant     TEXT NOT NULL,
+            param_label TEXT NOT NULL,
+            description TEXT NOT NULL,
+            date_from   TEXT NOT NULL,
+            date_to     TEXT NOT NULL,
+            mean        REAL,
+            sigma       REAL,
+            n_points    INTEGER,
+            approved_by TEXT,
+            approved_at TEXT,
+            notes       TEXT,
+            UNIQUE(name, variant, param_label, description)
+        )
+    """)
+    con.execute("""
+        INSERT INTO baseline_profiles
+            (id, name, variant, param_label, description, date_from, date_to,
+             mean, sigma, n_points, approved_by, approved_at, notes)
+        SELECT id, name, variant, param_label, description, date_from, date_to,
+               mean, sigma, n_points, approved_by, approved_at, notes
+        FROM baseline_profiles_old_unique_name AS o
+        WHERE o.id = (
+            SELECT MAX(id) FROM baseline_profiles_old_unique_name AS o2
+            WHERE o2.name=o.name AND o2.variant=o.variant
+              AND o2.param_label=o.param_label AND o2.description=o.description
+        )
+    """)
+    con.execute("DROP TABLE baseline_profiles_old_unique_name")
+    # Commit inmediato: esta migracion (rename+create+insert+drop) no debe
+    # depender de que la funcion publica que la disparo (p. ej.
+    # list_baseline_profiles, que es de solo lectura y no hace commit)
+    # confirme la transaccion; sin esto, cerrar la conexion sin commit
+    # revierte el DDL en silencio y la migracion parece "no haber pasado".
+    con.commit()
+
+
 def _ensure_baseline_table(con):
     con.execute("""
         CREATE TABLE IF NOT EXISTS baseline_profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT NOT NULL UNIQUE,
+            name        TEXT NOT NULL,
             variant     TEXT NOT NULL,
             param_label TEXT NOT NULL,
             description TEXT NOT NULL,
@@ -442,9 +518,11 @@ def _ensure_baseline_table(con):
             n_points    INTEGER,
             approved_by TEXT,
             approved_at TEXT,
-            notes       TEXT
+            notes       TEXT,
+            UNIQUE(name, variant, param_label, description)
         )
     """)
+    _migrar_baseline_unique_name_global(con)
     con.execute("""
         CREATE INDEX IF NOT EXISTS idx_baseline_lookup
         ON baseline_profiles(variant, param_label, description)
@@ -454,7 +532,12 @@ def _ensure_baseline_table(con):
 def save_baseline_profile(name, variant, param_label, description,
                           date_from, date_to, mean, sigma, n_points,
                           approved_by="", notes="", db_path=CONFIG_DB):
-    """Guarda (o reemplaza, por nombre) un perfil de baseline aprobado."""
+    """Guarda (o reemplaza) un perfil de baseline aprobado.
+
+    El nombre solo debe ser unico DENTRO de (variant, param_label,
+    description): dos perfiles de parametros distintos pueden compartir
+    nombre (ej. "Baseline 2024") sin pisarse entre si.
+    """
     from datetime import datetime as _dt
     con = _con(db_path)
     _ensure_baseline_table(con)
@@ -463,10 +546,9 @@ def save_baseline_profile(name, variant, param_label, description,
             (name, variant, param_label, description, date_from, date_to,
              mean, sigma, n_points, approved_by, approved_at, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(name) DO UPDATE SET
-            variant=excluded.variant, param_label=excluded.param_label,
-            description=excluded.description, date_from=excluded.date_from,
-            date_to=excluded.date_to, mean=excluded.mean, sigma=excluded.sigma,
+        ON CONFLICT(name, variant, param_label, description) DO UPDATE SET
+            date_from=excluded.date_from, date_to=excluded.date_to,
+            mean=excluded.mean, sigma=excluded.sigma,
             n_points=excluded.n_points, approved_by=excluded.approved_by,
             approved_at=excluded.approved_at, notes=excluded.notes
     """, (name, variant, param_label, description, date_from, date_to,

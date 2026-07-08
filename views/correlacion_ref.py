@@ -418,17 +418,41 @@ def _render_panel_ocultos(sel_var: str):
             items.append(d)
     if not items:
         return
+    # 'Restaurar todos' NO toca el alcance global: un punto oculto
+    # globalmente puede haber sido decision de otra persona para OTRA
+    # variante, y no debe desaparecer por limpiar la vista de esta.
+    items_locales = [i for i in items if i["scope"] != GLOBAL_HIDDEN_SCOPE]
+    items_globales = [i for i in items if i["scope"] == GLOBAL_HIDDEN_SCOPE]
     with st.expander(f"{len(items)} punto(s) oculto(s)", expanded=False):
         st.caption(
             "Estos puntos siguen intactos en motores.db; solo estan excluidos "
             "segun su alcance: un par especifico, toda Correlacion Ref. o "
             "toda la app (global)."
         )
-        if st.button(f"Restaurar todos ({len(items)})", key="corr_ref_unhide_all"):
-            for scope, _ in _scopes_de_ocultamiento():
-                unhide_all_points(scope=scope)
+        if items_locales and st.button(
+            f"Restaurar todos los de esta vista ({len(items_locales)})",
+            key="corr_ref_unhide_all",
+            help="Restaura solo 'toda la vista' y 'un par especifico'. NO toca "
+                 "los ocultos globales (afectan a toda la app, se restauran aparte).",
+        ):
+            unhide_all_points(scope=HIDDEN_SCOPE)
+            for nombre_par in BLOQUES_COLUMNAS:
+                unhide_all_points(scope=_scope_par(nombre_par))
             _limpiar_selecciones_tabla(sel_var)
             st.rerun()
+        if items_globales:
+            st.warning(
+                f"{len(items_globales)} punto(s) oculto(s) GLOBALMENTE (afectan "
+                "toda la app, no solo esta vista). Restaurarlos aqui los hace "
+                "visibles de nuevo en Tendencia, Anomalias, Datos, etc."
+            )
+            if st.button(
+                f"Restaurar tambien los {len(items_globales)} globales",
+                key="corr_ref_unhide_all_global",
+            ):
+                unhide_all_points(scope=GLOBAL_HIDDEN_SCOPE)
+                _limpiar_selecciones_tabla(sel_var)
+                st.rerun()
         st.divider()
         for item in items:
             c1, c2 = st.columns([5, 1])

@@ -90,10 +90,13 @@ def render(filtros):
             for perfil in cfg.list_baseline_profiles(variant=sel_var):
                 clave = (perfil["param_label"], perfil["description"])
                 if clave in vistos:
-                    continue  # la lista viene mas reciente primero
-                vistos.add(clave)
+                    continue  # ya resuelto con un perfil mas reciente y valido
                 if perfil["mean"] is None or not perfil["sigma"] or perfil["sigma"] <= 0:
+                    # perfil invalido: se ignora SIN marcar como resuelto, para
+                    # que un perfil mas viejo y valido del mismo (parametro,
+                    # description) todavia pueda usarse en una vuelta posterior.
                     continue
+                vistos.add(clave)
                 out[clave] = {
                     "mu": float(perfil["mean"]),
                     "sd": float(perfil["sigma"]),
