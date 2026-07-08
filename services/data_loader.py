@@ -97,10 +97,11 @@ def load_data(db_path, db_mtime=None):
     df["fecha_iso"] = df["test_date_iso"].fillna(df["fecha"].dt.strftime("%Y-%m-%d"))
     df["fecha_iso"] = df["fecha_iso"].fillna(df["test_date"])
 
-    # Correccion de unidades de flujo de combustible (kg/h -> lb/h) para
-    # reportes capturados con la unidad equivocada. Debe correr ANTES de
-    # construir param_label/serie, para que la fila corregida se una a la
-    # serie imperial correcta en vez de quedar aparte como "... [kg_h]".
+    # Correccion de flujo de combustible: en ciertos reportes el numero
+    # viene en magnitud kg/h aunque la unidad ya diga "pph" (etiqueta
+    # correcta, dato mal capturado). Se corrige por variante+parametro+fecha,
+    # no por el texto de unidad. Debe correr antes de construir param_label
+    # (que ya incluira la etiqueta correcta, sin cambios).
     apply_unit_corrections(df)
 
     # Consecutivo por variante, ordenado por fecha normalizada (mas antiguo = 1).
