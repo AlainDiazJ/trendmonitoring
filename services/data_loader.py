@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from db_migrations import ensure_schema_and_backfill
+from services.unit_corrections import apply_unit_corrections
 
 DB_PATH = "data/motores.db"
 
@@ -95,6 +96,12 @@ def load_data(db_path, db_mtime=None):
     # Version ISO (AAAA-MM-DD) de la fecha, para tablas ordenables.
     df["fecha_iso"] = df["test_date_iso"].fillna(df["fecha"].dt.strftime("%Y-%m-%d"))
     df["fecha_iso"] = df["fecha_iso"].fillna(df["test_date"])
+
+    # Correccion de unidades de flujo de combustible (kg/h -> lb/h) para
+    # reportes capturados con la unidad equivocada. Debe correr ANTES de
+    # construir param_label/serie, para que la fila corregida se una a la
+    # serie imperial correcta en vez de quedar aparte como "... [kg_h]".
+    apply_unit_corrections(df)
 
     # Consecutivo por variante, ordenado por fecha normalizada (mas antiguo = 1).
     # Orden estable: fecha/hora ISO, numero de punto, id.
