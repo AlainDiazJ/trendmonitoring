@@ -29,7 +29,6 @@ import streamlit as st
 
 import config_store as cfg
 from services.data_loader import DB_PATH, load_data
-from services.unit_corrections import apply_unit_corrections
 from views import (
     anomalias,
     correlacion,
@@ -154,8 +153,9 @@ APP_CSS = """
 st.markdown(APP_CSS, unsafe_allow_html=True)
 
 _db_mtime = Path(DB_PATH).stat().st_mtime if Path(DB_PATH).exists() else None
-# Se carga crudo. La correccion kg/h -> lb/h se aplica despues del sidebar,
-# solo cuando el parametro seleccionado tiene una regla activa.
+# Se carga crudo. La correccion kg/h -> lb/h la activa cada vista (Tendencia,
+# Correlacion, Correlacion Ref.) con su propio checkbox, solo cuando el
+# parametro que esa vista tiene seleccionado cae en una regla activa.
 df = load_data(DB_PATH, _db_mtime, aplicar_correcciones_unidad=False)
 
 st.markdown(
@@ -195,19 +195,13 @@ if _ocultos_global:
         st.stop()
 
 _parse_counts = df[["point_id", "date_parse_status"]].drop_duplicates()["date_parse_status"].value_counts(dropna=False)
-_n_amb = int(_parse_counts.get("ambiguous", 0))
 _n_err = int(_parse_counts.get("error", 0) + _parse_counts.get("missing", 0))
 if _n_err:
     st.warning(f"Hay {_n_err} punto(s) con fecha sin parsear o faltante. Revisa la pestana Datos antes de confiar en tendencias.")
-elif _n_amb:
-    st.info(f"Hay {_n_amb} punto(s) con fecha ambigua; se interpretaron como DD/MM/YYYY desde el ETL.")
 
 
 # FILTROS (sidebar) -> objeto Filtros con fdf, dfv_hist, seleccion actual
 filtros = render_sidebar(df)
-if st.session_state.get("apply_unit_corrections", False):
-    apply_unit_corrections(filtros.fdf)
-    apply_unit_corrections(filtros.dfv_hist)
 fdf = filtros.fdf
 
 tabs = ["Tendencia", "Correlacion", "Correlacion Ref.", "Anomalias", "Modificadores", "Eventos", "Datos"]

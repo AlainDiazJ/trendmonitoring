@@ -12,7 +12,6 @@ import pandas as pd
 import streamlit as st
 
 import config_store as cfg
-from services.unit_corrections import parametro_tiene_correccion
 
 
 @dataclass
@@ -131,17 +130,6 @@ def render_sidebar(df):
             help="Filtra por Rating / Punto. El numero entre parentesis es la cantidad de puntos cargados para el parametro actual cuando aplica.",
             key="f_desc",
         )
-        if parametro_tiene_correccion(sel_var, param_actual):
-            aplicar_corr = st.sidebar.checkbox(
-                "Aplicar correccion kg/h -> lb/h",
-                value=True,
-                help="Activa/apaga la correccion historica solo para este parametro.",
-                key="apply_unit_corrections",
-            )
-            if not aplicar_corr:
-                st.sidebar.warning("Correccion de flujo apagada: se muestran valores crudos.")
-        else:
-            st.session_state["apply_unit_corrections"] = False
         dfv = dfv[dfv["description"].isin(sel_desc)]
 
     # Filtro de rango de fechas (default: todo el historico de esa variante)

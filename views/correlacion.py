@@ -7,8 +7,15 @@ Extraida de app.py sin cambios de logica.
 import plotly.express as px
 import streamlit as st
 
+from services.unit_corrections import (
+    apply_unit_corrections,
+    checkbox_correccion,
+    parametro_tiene_correccion,
+)
+
 def render(filtros):
     fdf = filtros.fdf
+    sel_var = filtros.sel_var
     sel_lbl = filtros.sel_lbl
 
     st.subheader(f"Correlacion - {sel_lbl}")
@@ -48,6 +55,15 @@ def render(filtros):
             "Eje Y", todos_params, key="_corr_y", on_change=_save_corr_y,
         )
 
+    datos = fdf
+    if parametro_tiene_correccion(sel_var, px_par) or parametro_tiene_correccion(sel_var, py_par):
+        if checkbox_correccion(
+            key="unit_corr_correlacion",
+            ayuda="Corrige el eje (X y/o Y) que tenga la regla activa.",
+        ):
+            datos = fdf.copy()
+            apply_unit_corrections(datos)
+
     def serie_por_punto(data, param_label):
         s = data[data["param_label"] == param_label]
         if s.empty:
@@ -55,8 +71,8 @@ def render(filtros):
         return s.groupby(["point_id", "consecutivo", "description", "test_date", "source_file"],
                          as_index=False, dropna=False)["value"].mean().rename(columns={"value": param_label})
 
-    gx = serie_por_punto(fdf, px_par)
-    gy = serie_por_punto(fdf, py_par)
+    gx = serie_por_punto(datos, px_par)
+    gy = serie_por_punto(datos, py_par)
     if gx is None or gy is None:
         st.warning("Uno de los parametros no tiene datos con los filtros actuales.")
     elif px_par == py_par:

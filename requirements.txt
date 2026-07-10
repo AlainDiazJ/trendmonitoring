@@ -1,15 +1,15 @@
 # Dashboard (app.py y views/)
-streamlit
-pandas
-numpy
-plotly
+streamlit>=1.38,<2
+pandas>=2.2,<3
+numpy>=1.26,<3
+plotly>=5.20,<7
 
 # ETL y acceso a datos (etl.py, resync_measurements.py)
-sqlalchemy
-pyyaml
-openpyxl
-xlrd
+sqlalchemy>=2.0,<3
+pyyaml>=6.0,<7
+openpyxl>=3.1,<4
+xlrd>=2.0,<3
 
 # Exportacion de reportes (report_export.py)
-matplotlib
-reportlab
+matplotlib>=3.8,<4
+reportlab>=4.0,<6

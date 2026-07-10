@@ -62,6 +62,11 @@ from config_store import (
     unhide_all_points,
     list_hidden_points_detail,
 )
+from services.unit_corrections import (
+    apply_unit_corrections,
+    checkbox_correccion,
+    parametro_tiene_correccion,
+)
 
 # ---------------------------------------------------------------------------
 # Configuracion fija
@@ -561,6 +566,15 @@ def render(fdf: pd.DataFrame, sel_var: str, sel_lbl: str):
     _render_panel_ocultos(sel_var)
     fdf_vis = _filtrar_ocultos(fdf, HIDDEN_SCOPE)
 
+    mapeo = MAPEO_VARIABLES.get(sel_var, {})
+    if any(parametro_tiene_correccion(sel_var, raw) for raw in mapeo.values()):
+        if checkbox_correccion(
+            key="unit_corr_correlacion_ref",
+            ayuda="Corrige los pares que usen un parametro con regla activa.",
+        ):
+            fdf_vis = fdf_vis.copy()
+            apply_unit_corrections(fdf_vis)
+
     col_a, col_b = st.columns(2)
     with col_a:
         grado = st.select_slider(
@@ -573,7 +587,6 @@ def render(fdf: pd.DataFrame, sel_var: str, sel_lbl: str):
             key="corr_ref_nsigma",
         )
 
-    mapeo = MAPEO_VARIABLES.get(sel_var, {})
     raws_en_datos = set(fdf_vis["raw_name"].unique())
     faltantes_raw = sorted({
         f"{v} -> {mapeo.get(v)}" for par in pares.values() for v in (par.var_x, par.var_y)

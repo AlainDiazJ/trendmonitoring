@@ -21,6 +21,7 @@ views/correlacion_ref.py (PARES_CON_CONVERSION_K_A_C): una tabla de reglas
 """
 
 import pandas as pd
+import streamlit as st
 
 KG_H_A_LB_H = 2.20462262
 
@@ -46,6 +47,25 @@ def parametro_tiene_correccion(variant, param_label):
         if variant == rule_variant and raw_name in raw_names:
             return True
     return False
+
+
+def checkbox_correccion(key, ayuda=None):
+    """Checkbox 'Aplicar correccion kg/h -> lb/h', desactivado por defecto.
+
+    Cada vista decide primero con parametro_tiene_correccion() si el
+    parametro que tiene seleccionado en ESE momento la necesita, y solo
+    entonces llama a este checkbox con una key propia (no compartida entre
+    pestanas): asi el estado nunca queda atado al parametro de otra vista.
+    """
+    aplicar = st.checkbox(
+        "Aplicar correccion kg/h -> lb/h", value=False,
+        help=ayuda or "Corrige el flujo de combustible en los reportes donde "
+                       "el dato se capturo mal (ver services/unit_corrections.py).",
+        key=key,
+    )
+    if not aplicar:
+        st.caption("Correccion de flujo apagada: se muestran valores crudos.")
+    return aplicar
 
 
 def apply_unit_corrections(df):

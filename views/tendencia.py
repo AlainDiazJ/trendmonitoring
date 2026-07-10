@@ -10,6 +10,11 @@ import plotly.express as px
 import streamlit as st
 
 import config_store as cfg
+from services.unit_corrections import (
+    apply_unit_corrections,
+    checkbox_correccion,
+    parametro_tiene_correccion,
+)
 
 def pos_evento_en_consecutivo(fecha_evento, pts_df):
     """Traduce la fecha de un evento a una posicion en el eje X numerico.
@@ -73,6 +78,12 @@ def render(filtros):
         p_sel = st.selectbox("Parametro", todos_params, index=default_idx, key="f_param")
 
         sub = fdf[fdf["param_label"] == p_sel].copy().sort_values("consecutivo")
+
+        if parametro_tiene_correccion(sel_var, p_sel):
+            if checkbox_correccion(key="unit_corr_tendencia"):
+                apply_unit_corrections(sub)
+                apply_unit_corrections(dfv_hist)
+
         # eje X solo con consecutivos activos
         orden = sorted(sub["consecutivo"].unique())
 
