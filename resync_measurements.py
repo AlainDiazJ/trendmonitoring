@@ -51,12 +51,19 @@ from etl import (
 
 def find_source_path(source_file, folders):
     """Busca 'source_file' (solo el nombre) dentro de las carpetas dadas.
+
+    Primero prueba el nombre directo dentro de cada carpeta; si no esta ahi,
+    busca recursivamente (Loaded/ puede tener subcarpetas por variante).
     Devuelve el primer Path que exista, o None si no aparece en ninguna."""
     name = Path(str(source_file)).name
     for folder in folders:
-        candidate = Path(folder) / name
+        folder = Path(folder)
+        candidate = folder / name
         if candidate.exists():
             return candidate
+        matches = list(folder.rglob(name))
+        if matches:
+            return matches[0]
     return None
 
 

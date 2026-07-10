@@ -58,6 +58,11 @@ def quarantine_source_excels(source_files, source_folder, quarantine_root=QUARAN
             continue
         src = Path(str(source_file))
         path = src if src.is_absolute() else folder / src.name
+        if not (src.is_absolute() or path.exists()):
+            # puede estar en una subcarpeta (p. ej. Loaded/<variante>/)
+            matches = list(folder.rglob(src.name))
+            if matches:
+                path = matches[0]
         try:
             if path.exists() and path.is_file():
                 dest_dir.mkdir(parents=True, exist_ok=True)

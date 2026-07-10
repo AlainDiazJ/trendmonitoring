@@ -114,6 +114,42 @@ def grafica_tendencia_png(sub, p_sel, sel_lbl, stats=None, eventos_pos=None,
     return buf.getvalue()
 
 
+def grafica_comparacion_png(base, sel_multi, sel_lbl, colores):
+    """Genera la grafica de modo comparacion como PNG (bytes), un parametro
+    por serie, todas normalizadas 0-100% en un solo eje para que se puedan
+    leer juntas sin importar la magnitud. Los valores reales van en la tabla
+    del Excel, no en esta imagen.
+
+    base: DataFrame largo con columnas 'consecutivo', 'param_label', 'value'.
+    sel_multi: lista de param_label en el orden a graficar/leyenda.
+    colores: lista de colores (hex) en el mismo orden que sel_multi, para
+    que la leyenda coincida con la grafica en pantalla (Plotly).
+    """
+    fig, ax = plt.subplots(figsize=(10, 5.2))
+    for i, p in enumerate(sel_multi):
+        s = base[base["param_label"] == p].sort_values("consecutivo")
+        if s.empty:
+            continue
+        x = s["consecutivo"].astype(float)
+        v = s["value"].astype(float)
+        rng = v.max() - v.min()
+        vn = (v - v.min()) / rng * 100 if rng != 0 else v * 0 + 50
+        ax.plot(x, vn, marker="o", linewidth=1.6,
+                color=colores[i % len(colores)], label=p)
+
+    ax.set_xlabel("No de reporte (consecutivo)")
+    ax.set_ylabel("Valor normalizado (0-100%)")
+    ax.set_title(f"Comparacion {sel_lbl} (normalizado 0-100%, ver valores reales en la tabla)")
+    ax.legend(loc="best", fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.autofmt_xdate(rotation=0)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def exportar_excel(datos_df, stats_dict, meta, config=None, grafica_png=None):
     """Genera un .xlsx con una hoja Reporte equivalente al PDF.
 

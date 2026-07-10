@@ -449,11 +449,11 @@ def process_file(session, path, mapping):
     fname = path.name
     buf = read_buffer(path)
     if buf is None:
-        return ("error", "No se encontro hoja 'Buffer'")
+        return ("error", "No se encontro hoja 'Buffer'", None)
 
     variant = detect_variant(fname, buf)
     if variant is None:
-        return ("error", f"No se pudo detectar motor soportado (LEAP-1A/1B, CFM56-5A/7B): {fname}")
+        return ("error", f"No se pudo detectar motor soportado (LEAP-1A/1B, CFM56-5A/7B): {fname}", None)
 
     ident = get_identity(buf, mapping, variant)
     date_info = parse_excel_date_time(ident.get("date"), ident.get("time"))
@@ -466,7 +466,7 @@ def process_file(session, path, mapping):
         select(TestPoint).where(TestPoint.row_hash == row_hash)
     ).scalar_one_or_none()
     if existing is not None:
-        return ("skipped", f"Punto ya cargado (hash existe): {fname}")
+        return ("skipped", f"Punto ya cargado (hash existe): {fname}", variant)
 
     # engine (crea si no existe)
     engine_type = display_engine_type(variant)
@@ -510,7 +510,14 @@ def process_file(session, path, mapping):
             point_id=tp.id, canonical=canon, raw_name=raw, value=val, unit=unit
         ))
 
-    return ("ok", f"{len(meas)} mediciones cargadas ({engine_type})")
+    return ("ok", f"{len(meas)} mediciones cargadas ({engine_type})", variant)
+
+
+def _list_excel_files(folder):
+    return sorted(
+        p for p in folder.iterdir()
+        if p.suffix.lower() in (".xls", ".xlsm", ".xlsx") and not p.name.startswith("~")
+    )
 
 
 def run(folder, db_path, mapping_path):
@@ -523,17 +530,14 @@ def run(folder, db_path, mapping_path):
     Base.metadata.create_all(engine)
     ensure_schema_migrations(engine)
 
-    files = sorted(
-        p for p in folder.iterdir()
-        if p.suffix.lower() in (".xls", ".xlsm", ".xlsx") and not p.name.startswith("~")
-    )
+    files = _list_excel_files(folder)
     print(f"Archivos a procesar: {len(files)}")
     counts = {"ok": 0, "skipped": 0, "error": 0}
 
     with Session(engine) as session:
         for f in files:
             try:
-                status, detail = process_file(session, f, mapping)
+                status, detail, _variant = process_file(session, f, mapping)
             except Exception as e:
                 status, detail = "error", f"{type(e).__name__}: {e}"
             counts[status] = counts.get(status, 0) + 1
@@ -547,6 +551,72 @@ def run(folder, db_path, mapping_path):
     print(f"\nResumen: {counts['ok']} cargados, {counts['skipped']} omitidos, "
           f"{counts['error']} con error.")
     print(f"Base de datos: {db_path.resolve()}")
+
+
+def run_sync(unloaded_dir, loaded_dir, db_path, mapping_path):
+    """Carga los Exceles de unloaded_dir a db_path y mueve los que cargan
+    bien (status "ok") a loaded_dir/<variante_display>/. Los duplicados
+    (skipped) y los que fallan (error) se quedan en unloaded_dir.
+
+    Devuelve un dict resumen: ok, skipped, error, moved, move_errors,
+    mensajes (lista de strings por archivo, para mostrar en la UI).
+    """
+    import shutil
+
+    unloaded_dir = Path(unloaded_dir)
+    loaded_dir = Path(loaded_dir)
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    mapping = load_mapping(mapping_path)
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    ensure_schema_migrations(engine)
+
+    files = _list_excel_files(unloaded_dir)
+    counts = {"ok": 0, "skipped": 0, "error": 0, "moved": 0, "move_errors": 0}
+    mensajes = []
+
+    with Session(engine) as session:
+        for f in files:
+            try:
+                status, detail, variant = process_file(session, f, mapping)
+            except Exception as e:
+                status, detail, variant = "error", f"{type(e).__name__}: {e}", None
+            counts[status] = counts.get(status, 0) + 1
+            session.add(IngestLog(
+                source_file=f.name, status=status, detail=detail,
+                ingested_at=datetime.now(timezone.utc),
+            ))
+            print(f"  [{status.upper()}] {f.name}: {detail}")
+
+            if status == "ok" and variant is not None:
+                dest_dir = loaded_dir / display_engine_type(variant)
+                try:
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    dest = dest_dir / f.name
+                    seq = 2
+                    while dest.exists():
+                        dest = dest_dir / f"{f.stem} ({seq}){f.suffix}"
+                        seq += 1
+                    shutil.move(str(f), str(dest))
+                    counts["moved"] += 1
+                    mensajes.append(f"[OK] {f.name}: cargado y movido a {dest_dir.name}/")
+                except Exception as e:
+                    counts["move_errors"] += 1
+                    mensajes.append(
+                        f"[OK, NO MOVIDO] {f.name}: cargado en la base pero no se pudo "
+                        f"mover ({type(e).__name__}: {e}) - muevelo manualmente a "
+                        f"Loaded/{display_engine_type(variant)}/"
+                    )
+            else:
+                mensajes.append(f"[{status.upper()}] {f.name}: {detail}")
+
+        session.commit()
+
+    print(f"\nResumen sync: {counts['ok']} cargados ({counts['moved']} movidos a Loaded), "
+          f"{counts['skipped']} omitidos, {counts['error']} con error.")
+    return {"total": len(files), "mensajes": mensajes, **counts}
 
 
 if __name__ == "__main__":

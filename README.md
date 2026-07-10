@@ -34,7 +34,37 @@ Python 3.11+ recomendado.
 pip install -r requirements.txt
 ```
 
-## Flujo de uso
+## Estructura de carpetas recomendada + boton Sync
+
+La app espera que `Unloaded/` y `Loaded/` vivan como hermanas de la carpeta
+del proyecto (donde esta `app.py`), sin importar desde donde se lance
+`streamlit run`:
+
+```
+trend monitoring/
+├── App/            (este repo: app.py, data/motores.db, config.db, ...)
+├── Loaded/         (Exceles ya cargados, ordenados por variante)
+│   ├── LEAP-1A/
+│   ├── LEAP-1B/
+│   ├── CFM56-5A/
+│   └── CFM56-7B/
+└── Unloaded/       (Exceles nuevos, una sola carpeta plana)
+```
+
+Flujo normal de operacion:
+
+1. Coloca los Exceles nuevos en `trend monitoring/Unloaded/`.
+2. Abre la app: `cd .../App` y `streamlit run app.py`.
+3. Pulsa **Sync** (esquina superior derecha).
+4. Los Exceles que cargan bien se mueven automaticamente a
+   `Loaded/<variante>/`.
+5. Los duplicados o los que fallan (p. ej. sin hoja `Buffer`) se quedan en
+   `Unloaded/`; el resumen del Sync explica por que.
+
+Si `Unloaded/` no existe, el boton Sync avisa y no hace nada — crearla es
+suficiente para habilitarlo.
+
+## Flujo de uso (linea de comandos, alternativo al boton Sync)
 
 1. **Cargar datos** — corre el ETL sobre las carpetas con los Exceles de
    prueba (`.xls`, `.xlsx`, `.xlsm`, hoja `Buffer`):
@@ -49,7 +79,9 @@ pip install -r requirements.txt
 
    Si editas `mapping.yaml` para agregar canonicos nuevos, los puntos que ya
    estaban en la base NO los reciben automaticamente (el archivo entero se
-   salta por idempotencia). Para eso corre:
+   salta por idempotencia). Para eso corre (busca los Exceles de forma
+   recursiva, asi que puedes pasar `Loaded/` directamente aunque tenga
+   subcarpetas por variante):
 
    ```
    python resync_measurements.py --db data/motores.db --mapping mapping.yaml \

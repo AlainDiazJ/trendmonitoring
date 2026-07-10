@@ -28,6 +28,7 @@ from pathlib import Path
 import streamlit as st
 
 import config_store as cfg
+import etl
 from services.data_loader import DB_PATH, load_data
 from views import (
     anomalias,
@@ -158,10 +159,41 @@ _db_mtime = Path(DB_PATH).stat().st_mtime if Path(DB_PATH).exists() else None
 # parametro que esa vista tiene seleccionado cae en una regla activa.
 df = load_data(DB_PATH, _db_mtime, aplicar_correcciones_unidad=False)
 
-st.markdown(
-    '<div class="app-title">Trend Monitoring - Celda de Pruebas de Motores</div>',
-    unsafe_allow_html=True,
-)
+# Unloaded/ y Loaded/ viven siempre como hermanas de la carpeta de la app
+# (App/), sin depender del directorio desde el que se lanza streamlit.
+APP_DIR = Path(__file__).resolve().parent
+UNLOADED_DIR = APP_DIR.parent / "Unloaded"
+LOADED_DIR = APP_DIR.parent / "Loaded"
+
+col_title, col_sync = st.columns([0.82, 0.18])
+with col_title:
+    st.markdown(
+        '<div class="app-title">Trend Monitoring - Celda de Pruebas de Motores</div>',
+        unsafe_allow_html=True,
+    )
+with col_sync:
+    if st.button("Sync", key="btn_sync", use_container_width=True):
+        if not UNLOADED_DIR.exists():
+            st.info(
+                f"No existe la carpeta '{UNLOADED_DIR}'. Crea 'Unloaded' junto "
+                "a la carpeta de la app y coloca ahi los Exceles nuevos."
+            )
+        else:
+            with st.spinner("Cargando y ordenando Exceles..."):
+                resultado = etl.run_sync(UNLOADED_DIR, LOADED_DIR, DB_PATH, "mapping.yaml")
+            if resultado["total"] == 0:
+                st.info("No hay Exceles nuevos en 'Unloaded'.")
+            else:
+                st.success(
+                    f"{resultado['ok']} cargados ({resultado['moved']} movidos a Loaded), "
+                    f"{resultado['skipped']} duplicados, {resultado['error']} con error."
+                )
+                if resultado["skipped"] or resultado["error"] or resultado["move_errors"]:
+                    with st.expander("Detalle del sync"):
+                        for m in resultado["mensajes"]:
+                            st.caption(m)
+                load_data.clear()
+                st.rerun()
 
 if df is None:
     st.error(
@@ -246,10 +278,14 @@ if "vw_save" in st.session_state and st.session_state.get("vw_save"):
             "param": _param,
             "desc": filtros.sel_desc,
         }
-        # fechas actuales
-        _fechas = st.session_state.get("f_fechas")
-        if isinstance(_fechas, tuple) and len(_fechas) == 2:
-            _payload["d0"] = _fechas[0].isoformat()
-            _payload["d1"] = _fechas[1].isoformat()
+        # fechas actuales: guarda el modo siempre para no arrastrar un rango
+        # viejo de session_state si el usuario esta en "Historico completo"
+        _fecha_modo = st.session_state.get("f_fecha_modo", "Historico completo")
+        _payload["fecha_modo"] = _fecha_modo
+        if _fecha_modo == "Rango personalizado":
+            _fechas = st.session_state.get("f_fechas")
+            if isinstance(_fechas, tuple) and len(_fechas) == 2:
+                _payload["d0"] = _fechas[0].isoformat()
+                _payload["d1"] = _fechas[1].isoformat()
         cfg.save_view(_nombre, _payload)
         st.sidebar.success(f"Vista '{_nombre}' guardada.")

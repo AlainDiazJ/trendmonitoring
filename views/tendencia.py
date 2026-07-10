@@ -63,8 +63,9 @@ def render(filtros):
 
     modo_comp = st.checkbox(
         "Modo comparacion: varios parametros con su propio eje Y", value=False,
-        help="Compara hasta 4 parametros de magnitudes distintas. "
-             "Comparten el eje X (consecutivo).",
+        help="Compara parametros de magnitudes distintas, sin limite. "
+             "Comparten el eje X (consecutivo). Con muchos parametros la "
+             "vista Normalizado 0-100% suele ser mas legible.",
     )
 
     if not modo_comp:
@@ -634,13 +635,14 @@ def render(filtros):
                 "Regresion proyeccion reportes": regresion_export["proy"],
             })
 
-        _fechas_export = st.session_state.get("f_fechas")
-        if isinstance(_fechas_export, tuple) and len(_fechas_export) == 2:
-            rango_fechas_txt = f"{_fechas_export[0].isoformat()} a {_fechas_export[1].isoformat()}"
-        elif isinstance(_fechas_export, list) and len(_fechas_export) == 2:
-            rango_fechas_txt = f"{_fechas_export[0].isoformat()} a {_fechas_export[1].isoformat()}"
+        if st.session_state.get("f_fecha_modo", "Historico completo") == "Historico completo":
+            rango_fechas_txt = "Historico completo"
         else:
-            rango_fechas_txt = "Historico visible completo"
+            _fechas_export = st.session_state.get("f_fechas")
+            if isinstance(_fechas_export, (tuple, list)) and len(_fechas_export) == 2:
+                rango_fechas_txt = f"{_fechas_export[0].isoformat()} a {_fechas_export[1].isoformat()}"
+            else:
+                rango_fechas_txt = "Historico visible completo"
 
         desc_txt = "; ".join(sel_desc) if sel_desc else "(ninguna)"
         baseline_export_txt = baseline_modo
@@ -741,8 +743,11 @@ def render(filtros):
     else:
         # --- Varios parametros, cada uno con su eje Y ---
         sel_multi = st.multiselect(
-            "Parametros a comparar (max 4)", todos_params,
-            default=todos_params[:2], max_selections=4, key="tend_multi",
+            "Parametros a comparar", todos_params,
+            default=todos_params[:2], key="tend_multi",
+            help="Sin limite de cantidad. Con muchos parametros de magnitudes "
+                 "distintas la vista Normalizado 0-100% suele ser mas legible "
+                 "que Ejes Y separados.",
         )
         vista = st.radio(
             "Escala", ["Ejes Y separados (valores reales)", "Normalizado 0-100%"],
@@ -779,7 +784,13 @@ def render(filtros):
                 fig.update_yaxes(title_text="Valor normalizado (0-100%)")
                 fig.update_layout(xaxis=dict(categoryorder="array", categoryarray=xcat))
             else:
-                # cada parametro su propio eje Y
+                # cada parametro su propio eje Y. Los ejes extra se apilan a la
+                # derecha: el dominio del eje X se encoge para dejarles una
+                # banda propia fuera del area de trazado (si no, sus ticks
+                # quedan encimados sobre los datos).
+                n_right = len(sel_multi) - 1
+                step = 0.055
+                dom_right = max(0.5, 1 - step * n_right)
                 for i, p in enumerate(sel_multi):
                     s = base[base["param_label"] == p].sort_values("consecutivo")
                     axis_id = "y" if i == 0 else f"y{i+1}"
@@ -793,8 +804,8 @@ def render(filtros):
                     ))
                 # configurar ejes Y multiples
                 layout_axes = {"xaxis": dict(title="No de reporte (consecutivo)",
-                                             categoryorder="array", categoryarray=xcat)}
-                posiciones_der = [1.0, 0.94, 0.88]
+                                             categoryorder="array", categoryarray=xcat,
+                                             domain=[0, dom_right])}
                 for i, p in enumerate(sel_multi):
                     col = colores[i % len(colores)]
                     if i == 0:
@@ -802,20 +813,81 @@ def render(filtros):
                             title=dict(text=p, font=dict(color=col)),
                             tickfont=dict(color=col))
                     else:
-                        side = "right"
-                        pos = posiciones_der[(i-1) % len(posiciones_der)]
+                        pos = dom_right + (i - 1) * step
                         layout_axes[f"yaxis{i+1}"] = dict(
                             title=dict(text=p, font=dict(color=col)),
-                            overlaying="y", side=side, position=pos,
+                            overlaying="y", side="right", position=pos,
                             tickfont=dict(color=col),
-                            anchor="free" if i > 1 else "x",
+                            anchor="free", automargin=True,
                         )
                 fig.update_layout(**layout_axes)
 
-            fig.update_layout(height=560, legend=dict(orientation="h", y=1.12),
-                              margin=dict(r=120))
+            fig.update_layout(
+                height=560, legend=dict(orientation="h", y=1.12),
+                margin=dict(l=60, r=min(350, 80 + 45 * (len(sel_multi) - 1)), t=60, b=60),
+            )
             st.plotly_chart(fig, use_container_width=True)
             if vista.startswith("Ejes") and len(sel_multi) > 2:
-                st.caption("Con mas de 2 parametros los ejes Y se apilan a la derecha; "
-                           "si se satura, prueba la vista Normalizado.")
+                st.caption("Con mas de 2 parametros los ejes Y se apilan a la derecha.")
+            if vista.startswith("Ejes") and len(sel_multi) > 8:
+                st.warning("Con mas de 8 parametros la vista de ejes separados es "
+                           "dificil de leer; considera Normalizado 0-100%.")
+
+            # ---- Exportar Excel (grafica + tabla de datos) ----
+            st.markdown("---")
+            from services.comparison_export import build_comparison_table
+            tabla_comp = build_comparison_table(base, sel_multi)
+
+            if st.session_state.get("f_fecha_modo", "Historico completo") == "Historico completo":
+                _rango_comp_txt = "Historico completo"
+            else:
+                _f = st.session_state.get("f_fechas")
+                _rango_comp_txt = (
+                    f"{_f[0].isoformat()} a {_f[1].isoformat()}"
+                    if isinstance(_f, (tuple, list)) and len(_f) == 2
+                    else "Historico visible completo"
+                )
+            meta_comp = {
+                "Variante": sel_lbl,
+                "Parametros comparados": ", ".join(sel_multi),
+                "Rango de fechas": _rango_comp_txt,
+                "Puntos en reporte": len(orden),
+                "Generado": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+                "Nota": "La grafica exportada esta normalizada 0-100% para "
+                        "legibilidad; los valores reales estan en la tabla.",
+            }
+            config_comp = {
+                "Variante de motor": sel_lbl,
+                "Parametros a comparar": ", ".join(sel_multi),
+                "Escala en pantalla": vista,
+                "Rango de fechas": _rango_comp_txt,
+            }
+            stats_comp = {}
+            for p in sel_multi:
+                vals = base.loc[base["param_label"] == p, "value"].astype(float)
+                if not vals.empty:
+                    stats_comp[f"{p} (min / media / max)"] = (
+                        f"{vals.min():.3f} / {vals.mean():.3f} / {vals.max():.3f}"
+                    )
+
+            st.caption(
+                "La grafica exportada va normalizada 0-100% para que se puedan "
+                "leer todos los parametros juntos; los valores reales estan en "
+                "la tabla del Excel."
+            )
+            import report_export as rx
+            try:
+                png_comp = rx.grafica_comparacion_png(base, sel_multi, sel_lbl, colores)
+            except Exception as e:
+                png_comp = None
+                st.caption(f"No se pudo generar la grafica para exportar: {e}")
+            try:
+                xlsx_comp = rx.exportar_excel(tabla_comp, stats_comp, meta_comp, config_comp, png_comp)
+                st.download_button(
+                    "Descargar Excel (comparacion)", data=xlsx_comp,
+                    file_name=f"comparacion_{sel_var}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            except Exception as e:
+                st.caption(f"No se pudo generar Excel: {e}")
 

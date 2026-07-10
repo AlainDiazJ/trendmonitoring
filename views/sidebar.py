@@ -70,8 +70,11 @@ def render_sidebar(df):
                                 st.session_state["f_fechas"] = (
                                     _d.date.fromisoformat(payload["d0"]),
                                     _d.date.fromisoformat(payload["d1"]))
+                                st.session_state["f_fecha_modo"] = "Rango personalizado"
                             except Exception:
                                 pass
+                        elif payload.get("fecha_modo"):
+                            st.session_state["f_fecha_modo"] = payload["fecha_modo"]
                         st.rerun()
             with cvb:
                 if st.button("Borrar", key="vw_del") and vsel != "(ninguna)":
@@ -132,17 +135,25 @@ def render_sidebar(df):
         )
         dfv = dfv[dfv["description"].isin(sel_desc)]
 
-    # Filtro de rango de fechas (default: todo el historico de esa variante)
+    # Filtro de rango de fechas (default: historico completo de esa variante,
+    # sin que el usuario tenga que re-seleccionar el rango completo a mano)
     fechas_validas = dfv["fecha"].dropna()
     if not fechas_validas.empty:
         fmin = fechas_validas.min().date()
         fmax = fechas_validas.max().date()
         with st.sidebar.expander("Rango de fechas", expanded=False):
-            rango = st.date_input(
-                "Fechas", value=(fmin, fmax),
-                min_value=fmin, key="f_fechas",
+            modo_fecha = st.radio(
+                "Periodo", ["Historico completo", "Rango personalizado"],
+                key="f_fecha_modo",
             )
-        if isinstance(rango, tuple) and len(rango) == 2:
+            if modo_fecha == "Rango personalizado":
+                rango = st.date_input(
+                    "Fechas", value=(fmin, fmax),
+                    min_value=fmin, max_value=fmax, key="f_fechas",
+                )
+            else:
+                rango = None
+        if modo_fecha == "Rango personalizado" and isinstance(rango, tuple) and len(rango) == 2:
             d0, d1 = rango
             dfv = dfv[(dfv["fecha"].dt.date >= d0) & (dfv["fecha"].dt.date <= d1)]
 
