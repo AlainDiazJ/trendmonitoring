@@ -8,6 +8,10 @@ Ocultar/activar es solo cosmetico (config.db); no toca motores.db. Cargar un
 parametro nuevo si escribe en motores.db (via resync_measurements), y ademas
 lo registra en config.db para que etl.run/etl.run_sync tambien lo busquen en
 cargas futuras (etl.load_effective_mapping).
+
+"Cargar nuevos parametros" acepta varias filas a la vez (una fila nueva
+vacia aparece sola al llenar la ultima) y las resincroniza todas en UNA sola
+corrida de resync_measurements.run, no una por una.
 """
 
 from pathlib import Path
@@ -24,7 +28,7 @@ VARIANTES_DISPLAY = ["LEAP-1A", "LEAP-1B", "CFM56-5A", "CFM56-7B"]
 _WORKING_KEYS = (
     "_params_hidden_working", "_params_view", "_params_search",
     "_params_pick_hide_seq", "_params_pick_show_seq",
-    "_params_new_raw", "_params_new_variants",
+    "_params_new_rows", "_params_new_next_id",
 )
 
 
@@ -33,8 +37,10 @@ def _variante_interna(display_label):
 
 
 def _limpiar_estado_trabajo():
+    prefijos = ("_params_pick_hide_", "_params_pick_show_",
+                "_params_new_raw_", "_params_new_variants_")
     for k in list(st.session_state.keys()):
-        if k in _WORKING_KEYS or k.startswith("_params_pick_hide_") or k.startswith("_params_pick_show_"):
+        if k in _WORKING_KEYS or k.startswith(prefijos):
             st.session_state.pop(k, None)
 
 
@@ -129,18 +135,41 @@ def _vista_main(df):
 def _vista_nuevos(loaded_dir):
     st.markdown("**Cargar nuevos parametros**")
     st.caption(
-        "Busca este nombre (tal como aparece en la hoja Buffer) en los Exceles "
-        "ya cargados de los modelos elegidos, y lo deja registrado para que "
-        "tambien se busque en cargas futuras (boton Sync)."
+        "Busca estos nombres (tal como aparecen en la hoja Buffer) en los Exceles "
+        "ya cargados de los modelos elegidos, y los deja registrados para que "
+        "tambien se busquen en cargas futuras (boton Sync)."
     )
-    c1, c2 = st.columns(2)
-    with c1:
-        raw_name = st.text_input(
-            "Nombre del parametro (como en el Buffer)",
-            key="_params_new_raw", placeholder="ej. PS3B",
-        ).strip()
-    with c2:
-        variantes_sel = st.multiselect("Modelos", VARIANTES_DISPLAY, key="_params_new_variants")
+
+    # Filas dinamicas: una lista de ids en session_state. Se agrega una fila
+    # nueva vacia automaticamente en cuanto la ultima fila tiene texto, para
+    # poder cargar varios parametros sin reabrir el dialogo uno por uno.
+    rows = st.session_state.setdefault("_params_new_rows", [0])
+    st.session_state.setdefault("_params_new_next_id", 1)
+
+    entradas = []
+    for row_id in rows:
+        c1, c2 = st.columns(2)
+        with c1:
+            raw = st.text_input(
+                "Nombre del parametro (como en el Buffer)",
+                key=f"_params_new_raw_{row_id}", placeholder="ej. PS3B",
+            ).strip()
+        with c2:
+            variantes_sel = st.multiselect(
+                "Modelos", VARIANTES_DISPLAY, key=f"_params_new_variants_{row_id}",
+            )
+        entradas.append((raw, variantes_sel))
+
+    if entradas[-1][0]:
+        # la ultima fila ya tiene texto: agrega una fila vacia debajo. Como
+        # esa fila nueva nace vacia, este chequeo no se vuelve a disparar en
+        # la siguiente pasada (crece de a una fila, sin bucles).
+        next_id = st.session_state["_params_new_next_id"]
+        rows.append(next_id)
+        st.session_state["_params_new_next_id"] = next_id + 1
+        st.rerun(scope="fragment")
+
+    st.caption("Las filas vacias se ignoran.")
 
     b1, b2 = st.columns(2)
     with b1:
@@ -149,58 +178,79 @@ def _vista_nuevos(loaded_dir):
             st.rerun(scope="fragment")
     with b2:
         if st.button("OK", key="_params_new_ok", type="primary", use_container_width=True):
-            _confirmar_nuevo_parametro(raw_name, variantes_sel, loaded_dir)
+            no_vacias = [(raw, variantes) for raw, variantes in entradas if raw]
+            _confirmar_nuevos_parametros(no_vacias, loaded_dir)
 
 
-def _confirmar_nuevo_parametro(raw_name, variantes_sel, loaded_dir):
-    if not raw_name:
-        st.error("Escribe el nombre del parametro (como aparece en el Buffer).")
+def _confirmar_nuevos_parametros(entradas, loaded_dir):
+    """entradas: lista de (raw_name, variantes_display_sel) con raw_name no
+    vacio (las filas en blanco ya se filtraron antes de llamar esto)."""
+    if not entradas:
+        st.error("Agrega al menos un parametro con su(s) modelo(s).")
         return
-    if not variantes_sel:
-        st.error("Elige al menos un modelo de motor.")
+
+    faltan_modelo = [raw for raw, variantes in entradas if not variantes]
+    if faltan_modelo:
+        st.error(f"Elige al menos un modelo para: {', '.join(faltan_modelo)}.")
         return
 
-    variantes_internas = [_variante_interna(v) for v in variantes_sel]
     mapping_efectivo = etl.load_effective_mapping("mapping.yaml")
 
-    ya_existe, a_registrar = [], []
-    for v in variantes_internas:
+    # pares (raw_name, variante_interna) deduplicados de todo el lote: si el
+    # usuario repitio el mismo parametro+modelo en dos filas, no se registra
+    # ni se avisa "ya existe" dos veces para lo mismo.
+    pares = set()
+    for raw, variantes_sel in entradas:
+        for v in variantes_sel:
+            pares.add((raw, _variante_interna(v)))
+
+    nombres_lote = sorted({raw for raw, _v in pares})
+
+    ya_existe_por_raw = {}
+    a_registrar = set()
+    for raw, v in sorted(pares):
         existe = any(
-            raw_name in (por_var.get(v) or [])
+            raw in (por_var.get(v) or [])
             for por_var in mapping_efectivo.get("measurements", {}).values()
         )
-        (ya_existe if existe else a_registrar).append(v)
+        if existe:
+            ya_existe_por_raw.setdefault(raw, []).append(v)
+        else:
+            a_registrar.add((raw, v))
 
     # Los mensajes se acumulan y se muestran DESPUES del rerun que cierra el
     # dialogo (un st.warning/success justo antes de st.rerun() nunca llega a
     # pintarse: el rerun reemplaza la pagina antes de que el navegador
     # muestre este frame). app.py los lee y los limpia en el siguiente render.
     mensajes = []
-    if ya_existe:
-        etiquetas = ", ".join(etl.display_engine_type(v) for v in ya_existe)
-        mensajes.append(("warning", f"'{raw_name}' ya existe para: {etiquetas}. No se registro de nuevo ahi."))
+    for raw, variantes in ya_existe_por_raw.items():
+        etiquetas = ", ".join(etl.display_engine_type(v) for v in variantes)
+        mensajes.append(("warning", f"'{raw}' ya existe para: {etiquetas}. No se registro de nuevo ahi."))
+
     if not a_registrar:
         # nada nuevo que registrar: mostrar el aviso sin cerrar el dialogo
         for kind, msg in mensajes:
             getattr(st, kind)(msg)
         return
 
-    for v in a_registrar:
-        cfg.add_custom_param(raw_name, v)
+    for raw, v in a_registrar:
+        cfg.add_custom_param(raw, v)
 
-    folders = [str(Path(loaded_dir) / etl.display_engine_type(v)) for v in a_registrar]
-    with st.spinner("Buscando el parametro en los Exceles cargados..."):
-        resumen = resync_measurements.run(DB_PATH, "mapping.yaml", folders, variants=a_registrar)
+    variantes_a_resync = sorted({v for _raw, v in a_registrar})
+    folders = [str(Path(loaded_dir) / etl.display_engine_type(v)) for v in variantes_a_resync]
+    with st.spinner(f"Buscando {len(nombres_lote)} parametro(s) en los Exceles cargados..."):
+        resumen = resync_measurements.run(DB_PATH, "mapping.yaml", folders, variants=variantes_a_resync)
 
     total = (resumen or {}).get("total_agregadas", 0)
+    nombres_txt = ", ".join(nombres_lote)
     if total:
-        mensajes.append(("success", f"{total} mediciones agregadas para '{raw_name}'."))
+        mensajes.append(("success", f"{total} mediciones agregadas para: {nombres_txt}."))
     else:
         mensajes.append((
             "info",
-            f"No se encontro '{raw_name}' en los Exceles cargados para los modelos "
-            "seleccionados. Quedo registrado y aparecera en cargas futuras (Sync) "
-            "que si lo contengan.",
+            f"No se encontro ninguno de estos parametros en los Exceles cargados para "
+            f"los modelos seleccionados: {nombres_txt}. Quedaron registrados y "
+            "apareceran en cargas futuras (Sync) que si los contengan.",
         ))
     st.session_state["_params_flash"] = mensajes
 

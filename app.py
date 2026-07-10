@@ -182,31 +182,49 @@ with col_params:
 with col_sync:
     if st.button("Sync", key="btn_sync", use_container_width=True):
         if not UNLOADED_DIR.exists():
-            st.info(
-                f"No existe la carpeta '{UNLOADED_DIR}'. Crea 'Unloaded' junto "
-                "a la carpeta de la app y coloca ahi los Exceles nuevos."
-            )
+            st.session_state["_sync_flash"] = {
+                "tipo": "info",
+                "msg": (
+                    f"No existe la carpeta '{UNLOADED_DIR}'. Crea 'Unloaded' junto "
+                    "a la carpeta de la app y coloca ahi los Exceles nuevos."
+                ),
+            }
         else:
             with st.spinner("Cargando y ordenando Exceles..."):
                 resultado = etl.run_sync(UNLOADED_DIR, LOADED_DIR, DB_PATH, "mapping.yaml")
             if resultado["total"] == 0:
-                st.info("No hay Exceles nuevos en 'Unloaded'.")
+                st.session_state["_sync_flash"] = {
+                    "tipo": "info", "msg": "No hay Exceles nuevos en 'Unloaded'.",
+                }
             else:
-                st.success(
-                    f"{resultado['ok']} cargados ({resultado['moved']} movidos a Loaded), "
-                    f"{resultado['skipped']} duplicados, {resultado['error']} con error."
-                )
+                st.session_state["_sync_flash"] = {
+                    "tipo": "success",
+                    "msg": (
+                        f"{resultado['ok']} cargados ({resultado['moved']} movidos a "
+                        f"Loaded), {resultado['skipped']} duplicados, "
+                        f"{resultado['error']} con error."
+                    ),
+                }
                 if resultado["skipped"] or resultado["error"] or resultado["move_errors"]:
-                    with st.expander("Detalle del sync"):
-                        for m in resultado["mensajes"]:
-                            st.caption(m)
+                    st.session_state["_sync_detalle"] = resultado["mensajes"]
                 load_data.clear()
-                st.rerun()
+        st.rerun()
 
-# Mensajes diferidos del dialogo de Parametros (se guardan en session_state
-# porque un st.success/info justo antes del st.rerun() que cierra el dialogo
-# nunca llega a pintarse; se muestran aqui, en el primer render normal
-# despues de ese rerun, y se limpian para no repetirse).
+# Mensajes diferidos de Sync y del dialogo de Parametros (se guardan en
+# session_state porque un st.toast/success/info justo antes del st.rerun()
+# que dispara la actualizacion no llega a pintarse de forma confiable; se
+# muestran aqui, en el primer render normal siguiente, y se limpian para no
+# repetirse). st.toast se autodesvanece solo, sin necesitar logica de timer.
+_sync_flash = st.session_state.pop("_sync_flash", None)
+if _sync_flash:
+    _icon = "✅" if _sync_flash["tipo"] == "success" else "ℹ️"
+    st.toast(_sync_flash["msg"], icon=_icon)
+_sync_detalle = st.session_state.pop("_sync_detalle", None)
+if _sync_detalle:
+    with st.expander("Detalle del sync"):
+        for _m in _sync_detalle:
+            st.caption(_m)
+
 _params_flash = st.session_state.pop("_params_flash", None)
 if _params_flash:
     for _kind, _msg in _params_flash:
