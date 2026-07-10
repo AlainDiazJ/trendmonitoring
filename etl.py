@@ -379,6 +379,31 @@ def load_mapping(path):
         return yaml.safe_load(f)
 
 
+def load_effective_mapping(path, config_db=None):
+    """load_mapping(path) + los parametros que el usuario agrego desde la app
+    (boton Parametros > Cargar nuevos parametros), guardados en config.db sin
+    tocar mapping.yaml (que es un archivo curado, con comentarios que un
+    yaml.safe_dump destruiria).
+
+    Superpone measurements[canonical][variant] = [raw_name] por cada
+    custom_param registrado, sin duplicar si el mismo raw_name ya existe ahi.
+    """
+    import config_store as cfg
+
+    mapping = load_mapping(path)
+    db_path = config_db or cfg.CONFIG_DB
+    measurements = mapping.setdefault("measurements", {})
+    for canonical, raw_name, variant in cfg.list_custom_params(db_path):
+        por_variante = measurements.setdefault(canonical, {})
+        raw_names = por_variante.setdefault(variant, [])
+        if isinstance(raw_names, str):
+            raw_names = [raw_names]
+            por_variante[variant] = raw_names
+        if raw_name not in raw_names:
+            raw_names.append(raw_name)
+    return mapping
+
+
 def get_identity(buf, mapping, variant):
     """Extrae los campos de identidad para esta variante."""
     out = {}
@@ -525,7 +550,7 @@ def run(folder, db_path, mapping_path):
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    mapping = load_mapping(mapping_path)
+    mapping = load_effective_mapping(mapping_path)
     engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
     ensure_schema_migrations(engine)
@@ -568,7 +593,7 @@ def run_sync(unloaded_dir, loaded_dir, db_path, mapping_path):
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    mapping = load_mapping(mapping_path)
+    mapping = load_effective_mapping(mapping_path)
     engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
     ensure_schema_migrations(engine)

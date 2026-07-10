@@ -39,6 +39,7 @@ from views import (
     modificadores,
     tendencia,
 )
+from views import params_dialog
 from views.sidebar import render_sidebar
 
 
@@ -165,12 +166,19 @@ APP_DIR = Path(__file__).resolve().parent
 UNLOADED_DIR = APP_DIR.parent / "Unloaded"
 LOADED_DIR = APP_DIR.parent / "Loaded"
 
-col_title, col_sync = st.columns([0.82, 0.18])
+col_title, col_params, col_sync = st.columns([0.64, 0.18, 0.18])
 with col_title:
     st.markdown(
         '<div class="app-title">Trend Monitoring - Celda de Pruebas de Motores</div>',
         unsafe_allow_html=True,
     )
+with col_params:
+    if st.button("Parametros", key="btn_params", use_container_width=True):
+        if df is None or df.empty:
+            st.info("Carga datos primero (Sync) para administrar parametros.")
+        else:
+            params_dialog.iniciar_estado()
+            params_dialog.abrir_dialogo(df, LOADED_DIR)
 with col_sync:
     if st.button("Sync", key="btn_sync", use_container_width=True):
         if not UNLOADED_DIR.exists():
@@ -194,6 +202,15 @@ with col_sync:
                             st.caption(m)
                 load_data.clear()
                 st.rerun()
+
+# Mensajes diferidos del dialogo de Parametros (se guardan en session_state
+# porque un st.success/info justo antes del st.rerun() que cierra el dialogo
+# nunca llega a pintarse; se muestran aqui, en el primer render normal
+# despues de ese rerun, y se limpian para no repetirse).
+_params_flash = st.session_state.pop("_params_flash", None)
+if _params_flash:
+    for _kind, _msg in _params_flash:
+        getattr(st, _kind)(_msg)
 
 if df is None:
     st.error(

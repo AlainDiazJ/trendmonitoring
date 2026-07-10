@@ -45,7 +45,7 @@ from sqlalchemy.orm import Session
 # no duplicar logica ni arriesgar inconsistencias entre los dos scripts.
 from etl import (
     Base, Engine, TestPoint, Measurement, IngestLog,
-    read_buffer, load_mapping, get_measurements, ensure_schema_migrations,
+    read_buffer, load_effective_mapping, get_measurements, ensure_schema_migrations,
 )
 
 
@@ -79,19 +79,30 @@ def existing_keys_por_punto(session):
     return out
 
 
-def run(db_path, mapping_path, folders):
+def run(db_path, mapping_path, folders, variants=None):
+    """variants: opcional, iterable de variantes internas ("1A","1B",...) a
+    procesar. None (default, uso normal por CLI) procesa todos los puntos.
+    Pasar variants acota el trabajo (usado por el dialogo "Cargar nuevos
+    parametros" para no recorrer ni marcar 'sin archivo' puntos de modelos
+    que el usuario no selecciono).
+
+    Devuelve un dict resumen (n_ok, n_sin_nuevo, n_sin_archivo, n_sin_buffer,
+    total_agregadas), o None si la base no existe.
+    """
     db_path = Path(db_path)
     if not db_path.exists():
         print(f"[!] No existe la base: {db_path.resolve()}")
-        return
+        return None
 
-    mapping = load_mapping(mapping_path)
+    mapping = load_effective_mapping(mapping_path)
     engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)  # no-op si ya existen las tablas
     ensure_schema_migrations(engine)
 
     with Session(engine) as session:
         puntos = session.execute(select(TestPoint)).scalars().all()
+        if variants:
+            puntos = [p for p in puntos if p.variant in variants]
         print(f"Puntos en la base: {len(puntos)}")
 
         ya_tiene = existing_keys_por_punto(session)
@@ -146,6 +157,14 @@ def run(db_path, mapping_path, folders):
             "\n  Nota: si 'archivo no encontrado' > 0, revisa que pasaste TODAS "
             "las carpetas originales con --folder (una o varias veces)."
         )
+
+    return {
+        "n_ok": n_ok,
+        "n_sin_nuevo": n_sin_nuevo,
+        "n_sin_archivo": n_sin_archivo,
+        "n_sin_buffer": n_sin_buffer,
+        "total_agregadas": total_agregadas,
+    }
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import plotly.express as px
 import streamlit as st
 
 import config_store as cfg
+from services.param_visibility import parametros_visibles
 from services.unit_corrections import (
     apply_unit_corrections,
     checkbox_correccion,
@@ -59,7 +60,12 @@ def render(filtros):
     st.subheader(f"Tendencia - {sel_lbl}")
 
     # Cada version cruda (EGTK, EGTK3, FN, FNK...) es un parametro individual.
-    todos_params = sorted(fdf["param_label"].unique())
+    # parametros_visibles ya excluye los raw_name marcados como inactivos
+    # (boton Parametros); no afecta los datos, solo este desplegable.
+    todos_params = parametros_visibles(fdf)
+    if not todos_params:
+        st.warning("No hay parametros activos para esta seleccion; actívalos en Parametros.")
+        return
 
     modo_comp = st.checkbox(
         "Modo comparacion: varios parametros con su propio eje Y", value=False,

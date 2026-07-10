@@ -94,6 +94,34 @@ def test_views_roundtrip(db_path):
     assert cfg.get_view("EGT TKO 1B", db_path=db_path) is None
 
 
+def test_hidden_params_roundtrip(db_path):
+    assert cfg.list_hidden_params(db_path=db_path) == set()
+
+    cfg.set_hidden_params(["EGTK", "N1K"], db_path=db_path)
+    assert cfg.list_hidden_params(db_path=db_path) == {"EGTK", "N1K"}
+
+    # set_hidden_params reemplaza el conjunto completo, no acumula
+    cfg.set_hidden_params(["WFK"], db_path=db_path)
+    assert cfg.list_hidden_params(db_path=db_path) == {"WFK"}
+
+    cfg.set_hidden_params([], db_path=db_path)
+    assert cfg.list_hidden_params(db_path=db_path) == set()
+
+
+def test_custom_params_roundtrip_and_dedup(db_path):
+    assert cfg.list_custom_params(db_path=db_path) == []
+
+    cfg.add_custom_param("PS3B", "1B", db_path=db_path)
+    cfg.add_custom_param("PS3B", "CFM56-5A", db_path=db_path)
+    # duplicado (mismo raw_name + variant): no se repite
+    cfg.add_custom_param("PS3B", "1B", db_path=db_path)
+
+    registrados = cfg.list_custom_params(db_path=db_path)
+    assert len(registrados) == 2
+    assert ("ps3b", "PS3B", "1B") in registrados
+    assert ("ps3b", "PS3B", "CFM56-5A") in registrados
+
+
 def test_anom_status_default_pendiente(db_path):
     firma = cfg.anom_signature("1A", "EGTK [C]", 5, "outlier")
     assert cfg.get_anom_status(firma, db_path=db_path) == {"status": "Pendiente", "note": ""}

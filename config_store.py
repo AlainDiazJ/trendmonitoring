@@ -661,6 +661,89 @@ def list_excel_quarantine(db_path=CONFIG_DB):
     ]
 
 
+# ===========================================================================
+# PARAMETROS OCULTOS (limpiar los desplegables de Tendencia/Correlacion)
+# Global por raw_name: ocultar "EGTK" lo oculta en todas sus variantes/unidades.
+# Solo se guardan los ocultos; todo lo demas es activo por defecto.
+# ===========================================================================
+def _ensure_hidden_params_table(con):
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS hidden_params (
+            raw_name   TEXT PRIMARY KEY,
+            created_at TEXT
+        )
+    """)
+
+
+def list_hidden_params(db_path=CONFIG_DB):
+    """Devuelve el set de raw_name ocultos."""
+    con = _con(db_path)
+    _ensure_hidden_params_table(con)
+    rows = con.execute("SELECT raw_name FROM hidden_params").fetchall()
+    con.close()
+    return {r[0] for r in rows}
+
+
+def set_hidden_params(raw_names, db_path=CONFIG_DB):
+    """Reemplaza el conjunto completo de raw_name ocultos."""
+    from datetime import datetime as _dt
+    con = _con(db_path)
+    _ensure_hidden_params_table(con)
+    con.execute("DELETE FROM hidden_params")
+    now = _dt.now().isoformat(timespec="seconds")
+    con.executemany(
+        "INSERT INTO hidden_params (raw_name, created_at) VALUES (?, ?)",
+        [(rn, now) for rn in raw_names],
+    )
+    con.commit()
+    con.close()
+
+
+# ===========================================================================
+# PARAMETROS PERSONALIZADOS (raw_name nuevos agregados desde la app, sin
+# tocar mapping.yaml). Se fusionan al vuelo en etl.load_effective_mapping.
+# ===========================================================================
+def _ensure_custom_params_table(con):
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS custom_params (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            canonical  TEXT NOT NULL,
+            raw_name   TEXT NOT NULL,
+            variant    TEXT NOT NULL,
+            created_at TEXT,
+            UNIQUE(raw_name, variant)
+        )
+    """)
+
+
+def add_custom_param(raw_name, variant, canonical=None, db_path=CONFIG_DB):
+    """Registra un raw_name a buscar para una variante. canonical por defecto
+    es el propio raw_name en minusculas (solo se usa como llave interna del
+    mapping efectivo, no se muestra al usuario)."""
+    from datetime import datetime as _dt
+    canonical = canonical or raw_name.strip().lower()
+    con = _con(db_path)
+    _ensure_custom_params_table(con)
+    con.execute("""
+        INSERT INTO custom_params (canonical, raw_name, variant, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(raw_name, variant) DO NOTHING
+    """, (canonical, raw_name.strip(), variant, _dt.now().isoformat(timespec="seconds")))
+    con.commit()
+    con.close()
+
+
+def list_custom_params(db_path=CONFIG_DB):
+    """Lista de (canonical, raw_name, variant) registrados por el usuario."""
+    con = _con(db_path)
+    _ensure_custom_params_table(con)
+    rows = con.execute(
+        "SELECT canonical, raw_name, variant FROM custom_params ORDER BY id"
+    ).fetchall()
+    con.close()
+    return rows
+
+
 if __name__ == "__main__":
     # Prueba rapida
     set_threshold("1B", "EGTR2 [degC]", "TEST 003 : TAKE-OFF", 700.0, 850.0)

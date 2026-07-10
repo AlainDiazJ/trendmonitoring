@@ -7,6 +7,7 @@ Extraida de app.py sin cambios de logica.
 import plotly.express as px
 import streamlit as st
 
+from services.param_visibility import parametros_visibles
 from services.unit_corrections import (
     apply_unit_corrections,
     checkbox_correccion,
@@ -21,7 +22,10 @@ def render(filtros):
     st.subheader(f"Correlacion - {sel_lbl}")
     st.caption("Cada punto es un punto de prueba. Ej.: empuje vs. flujo de combustible.")
 
-    todos_params = sorted(fdf["param_label"].unique())
+    todos_params = parametros_visibles(fdf)
+    if not todos_params:
+        st.warning("No hay parametros activos para esta seleccion; actívalos en Parametros.")
+        return
 
     # Guardar la seleccion fuera del key del widget. Los keys que empiezan
     # con "_" son solo del selectbox; corr_*_saved sobreviven aunque el widget
