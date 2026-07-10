@@ -17,7 +17,7 @@
 # trazable (importante para auditoría).
 # ============================================================================
 
-version: 4
+version: 5
 pilot: LEAP + CFM56
 notes: >
   Núcleo confirmado contra 8 archivos 1A y 8 archivos 1B (todos 8/8).
@@ -30,6 +30,12 @@ notes: >
   N1K, N2K, WFK, W2AR, EGTK, FNK, EGTHD, T2, P2 y T25.
   v4: se agregan OCPR/SFCK y presiones necesarias para calcular OCPR derivado
   en LEAP-1B (PS3/PT2psia) y CFM56-5A (PS3SEL/PAMB_psi).
+  v5: se agregan PCELLF/PCELLR (presion de celda frente/trasera) como
+  nombres crudos adicionales para 1A y 1B, y como canonico nuevo para
+  CFM56-5A y CFM56-7B. CFM56-7B llama la trasera "PCELLR_abs" en el Buffer;
+  se normaliza a "PCELLR" al leer (services/data_loader.py), sin tocar el
+  dato crudo en motores.db. Correr resync_measurements.py para rellenar
+  puntos ya ingeridos.
 
 # ----------------------------------------------------------------------------
 # CAMPOS DE IDENTIFICACIÓN (sin unidad) -> columnas de test_points
@@ -164,11 +170,18 @@ measurements:
 
   # --- Salud de celda ---
   p_cell_front:
-    "1A": [FPCELL, FPCELLkPaa]
-    "1B": [PCELLFpsig]
+    "1A": [FPCELL, FPCELLkPaa, PCELLF]
+    "1B": [PCELLFpsig, PCELLF]
+    "CFM56-5A": [PCELLF]
+    "CFM56-7B": [PCELLF]
   p_cell_rear:
-    "1A": [RPCELL, RPCELLkPaa]
-    "1B": [PCELLRpsig]
+    "1A": [RPCELL, RPCELLkPaa, PCELLR]
+    "1B": [PCELLRpsig, PCELLR]
+    "CFM56-5A": [PCELLR]
+    # CFM56-7B llama esta variable PCELLR_abs en el Buffer; se normaliza a
+    # "PCELLR" en services/data_loader.py (mismo nombre que las demas
+    # variantes en la app, sin tocar el crudo en motores.db).
+    "CFM56-7B": [PCELLR_abs]
 
   # --- Modificadores de celda (factores de calibracion) ---
   # CRITICOS para auditoria: deben permanecer constantes entre reportes.

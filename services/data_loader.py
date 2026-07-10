@@ -33,6 +33,20 @@ def limpiar_description_display(description, variant):
     return " ".join(txt.split())
 
 
+# CFM56-7B llama a la presion de celda trasera "PCELLR_abs" en el Buffer,
+# mientras que las demas variantes (1A, 1B, CFM56-5A) usan "PCELLR" para el
+# mismo concepto (ver mapping.yaml). Se unifica el nombre aqui, en la
+# lectura, para que aparezca como un solo parametro seleccionable en la app;
+# el crudo en motores.db no se toca (queda como "PCELLR_abs").
+RAW_NAME_ALIASES = {
+    ("CFM56-7B", "PCELLR_abs"): "PCELLR",
+}
+
+
+def normalizar_raw_name(raw_name, variant):
+    return RAW_NAME_ALIASES.get((variant, raw_name), raw_name)
+
+
 @st.cache_data
 def load_data(db_path, db_mtime=None, aplicar_correcciones_unidad=True):
     # db_mtime solo participa en la clave de cache: invalida al cambiar motores.db.
@@ -85,6 +99,11 @@ def load_data(db_path, db_mtime=None, aplicar_correcciones_unidad=True):
     df["description"] = [
         limpiar_description_display(desc, var)
         for desc, var in zip(df["description_raw"], df["variant"])
+    ]
+
+    df["raw_name"] = [
+        normalizar_raw_name(raw, var)
+        for raw, var in zip(df["raw_name"], df["variant"])
     ]
 
     df["fecha"] = pd.to_datetime(df["test_date_iso"], errors="coerce")
