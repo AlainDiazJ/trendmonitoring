@@ -35,8 +35,7 @@ PARAMS_NUCLEO = (
     "PCELLF", "PCELLFpsig", "PCELLR", "PCELLRpsig",
     "FPCELL", "FPCELLkPaa", "RPCELL", "RPCELLkPaa",
     # Condiciones ambientales y de admision
-    "T2", "PAMB", "PAMBpsia", "PAMBkPa", "PAMB_psi", "HUM", "RH",
-    "PS3", "PS3SEL", "PT2psia", "OCPR", "SFCK", "SFCK_lbhlbf",
+    "T2", "PAMB", "PAMBpsia", "PAMBkPa", "HUM", "RH",
     # Energia de combustible
     "FHV",
 )

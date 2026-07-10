@@ -17,7 +17,7 @@
 # trazable (importante para auditoría).
 # ============================================================================
 
-version: 4
+version: 3
 pilot: LEAP + CFM56
 notes: >
   Núcleo confirmado contra 8 archivos 1A y 8 archivos 1B (todos 8/8).
@@ -28,8 +28,6 @@ notes: >
   todavia: correr resync_measurements.py para rellenarlas sin duplicar.
   v3: se agregan CFM56-5A y CFM56-7B con nucleo minimo de tendencia:
   N1K, N2K, WFK, W2AR, EGTK, FNK, EGTHD, T2, P2 y T25.
-  v4: se agregan OCPR/SFCK y presiones necesarias para calcular OCPR derivado
-  en LEAP-1B (PS3/PT2psia) y CFM56-5A (PS3SEL/PAMB_psi).
 
 # ----------------------------------------------------------------------------
 # CAMPOS DE IDENTIFICACIÓN (sin unidad) -> columnas de test_points
@@ -89,7 +87,6 @@ measurements:
   p_amb:
     "1A": [PAMB, PAMBkPa]
     "1B": [PAMBpsia]
-    "CFM56-5A": [PAMB_psi]
   t2:
     "1A": [T2]
     "1B": [T2]
@@ -146,21 +143,6 @@ measurements:
   t25:
     "CFM56-5A": [T25]
     "CFM56-7B": [T25]
-
-  # --- Presiones / performance para tendencia ---
-  ps3:
-    "1B": [PS3]
-    "CFM56-5A": [PS3SEL]
-  pt2:
-    "1B": [PT2psia]
-  ocpr:
-    "1A": [OCPR]
-    "CFM56-7B": [OCPR]
-  sfc:
-    "1A": [SFCK_lbhlbf]
-    "1B": [SFCK_lbhlbf]
-    "CFM56-5A": [SFCK]
-    "CFM56-7B": [SFCK]
 
   # --- Salud de celda ---
   p_cell_front:

@@ -37,6 +37,17 @@ CORRECCIONES_KGH_A_LBH = [
 ]
 
 
+def parametro_tiene_correccion(variant, param_label):
+    """True si el parametro seleccionado cae en una regla de correccion."""
+    if not variant or not param_label:
+        return False
+    raw_name = str(param_label).split(" [", 1)[0].strip()
+    for rule_variant, raw_names, _operador, _fecha_corte in CORRECCIONES_KGH_A_LBH:
+        if variant == rule_variant and raw_name in raw_names:
+            return True
+    return False
+
+
 def apply_unit_corrections(df):
     """Aplica CORRECCIONES_KGH_A_LBH sobre el DataFrame ya cargado.
 

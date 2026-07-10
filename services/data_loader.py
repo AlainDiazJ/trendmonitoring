@@ -34,7 +34,7 @@ def limpiar_description_display(description, variant):
 
 
 @st.cache_data
-def load_data(db_path, db_mtime=None):
+def load_data(db_path, db_mtime=None, aplicar_correcciones_unidad=True):
     # db_mtime solo participa en la clave de cache: invalida al cambiar motores.db.
     if not Path(db_path).exists():
         return None
@@ -101,8 +101,10 @@ def load_data(db_path, db_mtime=None):
     # viene en magnitud kg/h aunque la unidad ya diga "pph" (etiqueta
     # correcta, dato mal capturado). Se corrige por variante+parametro+fecha,
     # no por el texto de unidad. Debe correr antes de construir param_label
-    # (que ya incluira la etiqueta correcta, sin cambios).
-    apply_unit_corrections(df)
+    # (que ya incluira la etiqueta correcta, sin cambios). El usuario puede
+    # apagarla desde la app para comparar contra el dato crudo.
+    if aplicar_correcciones_unidad:
+        apply_unit_corrections(df)
 
     # Consecutivo por variante, ordenado por fecha normalizada (mas antiguo = 1).
     # Orden estable: fecha/hora ISO, numero de punto, id.
