@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
+*.bak_*
 data/
 quarantine/
+config.db
