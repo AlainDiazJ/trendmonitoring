@@ -29,6 +29,7 @@ import streamlit as st
 
 import config_store as cfg
 from services.data_loader import DB_PATH, load_data
+from services.unit_corrections import apply_unit_corrections
 from views import (
     anomalias,
     correlacion,
@@ -99,15 +100,47 @@ APP_CSS = """
     }
 
     section[data-testid="stSidebar"] div[data-baseweb="tag"] {
+        flex: 1 0 100% !important;
+        width: 100% !important;
         max-width: 100% !important;
+        min-height: 1.9rem !important;
+        height: auto !important;
+        align-items: flex-start !important;
+        white-space: normal !important;
+    }
+
+    section[data-testid="stSidebar"] div[data-baseweb="tag"],
+    section[data-testid="stSidebar"] div[data-baseweb="tag"] *,
+    section[data-testid="stSidebar"] div[data-baseweb="tag"] span,
+    section[data-testid="stSidebar"] div[data-baseweb="tag"] div {
+        max-width: none !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        white-space: normal !important;
+        word-break: break-word !important;
     }
 
     section[data-testid="stSidebar"] div[data-baseweb="tag"] span {
-        display: inline-block !important;
-        max-width: 18rem !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
+        display: inline !important;
+        line-height: 1.2rem !important;
         vertical-align: bottom !important;
+    }
+
+
+
+    section[data-testid="stSidebar"] div[data-baseweb="tag"] [title],
+    section[data-testid="stSidebar"] div[data-baseweb="tag"] [class*="Label"],
+    section[data-testid="stSidebar"] div[data-baseweb="tag"] [class*="label"],
+    section[data-testid="stSidebar"] div[data-baseweb="tag"] [class*="Text"],
+    section[data-testid="stSidebar"] div[data-baseweb="tag"] [class*="text"] {
+        display: inline !important;
+        width: auto !important;
+        max-width: none !important;
+        min-width: 0 !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        white-space: normal !important;
+        word-break: break-word !important;
     }
 
     ul[role="listbox"] li,
@@ -121,7 +154,9 @@ APP_CSS = """
 st.markdown(APP_CSS, unsafe_allow_html=True)
 
 _db_mtime = Path(DB_PATH).stat().st_mtime if Path(DB_PATH).exists() else None
-df = load_data(DB_PATH, _db_mtime)
+# Se carga crudo. La correccion kg/h -> lb/h se aplica despues del sidebar,
+# solo cuando el parametro seleccionado tiene una regla activa.
+df = load_data(DB_PATH, _db_mtime, aplicar_correcciones_unidad=False)
 
 st.markdown(
     '<div class="app-title">Trend Monitoring - Celda de Pruebas de Motores</div>',
@@ -170,6 +205,9 @@ elif _n_amb:
 
 # FILTROS (sidebar) -> objeto Filtros con fdf, dfv_hist, seleccion actual
 filtros = render_sidebar(df)
+if st.session_state.get("apply_unit_corrections", False):
+    apply_unit_corrections(filtros.fdf)
+    apply_unit_corrections(filtros.dfv_hist)
 fdf = filtros.fdf
 
 tabs = ["Tendencia", "Correlacion", "Correlacion Ref.", "Anomalias", "Modificadores", "Eventos", "Datos"]

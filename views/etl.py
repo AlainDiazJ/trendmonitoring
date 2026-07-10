@@ -139,14 +139,6 @@ def detect_variant(filename, buf=None):
     txt_principal = _clean(" ".join(principales))
     txt_flags = _clean(" ".join(flags))
 
-    # Si el archivo/campos principales dicen LEAP explicitamente, eso manda.
-    # Algunos buffers LEAP contienen textos auxiliares CFM, y antes eso podia
-    # hacer que un LEAP1A restaurado cayera como CFM56-7B.
-    if "LEAP1A" in txt_principal or "LEAP-1A" in txt_principal:
-        return "1A"
-    if "LEAP1B" in txt_principal or "LEAP-1B" in txt_principal:
-        return "1B"
-
     # Prioridad 7B antes que 5A: algunos buffers 7B contienen ambos flags.
     if "CFM56-7B" in txt_principal or "CFM567B" in txt_principal or "-7B" in txt_principal or "7B" in txt_principal:
         return "CFM56-7B"
@@ -400,30 +392,6 @@ def normalize_unit(unit, mapping):
     return table.get(u, u)
 
 
-def add_derived_measurements(rows, variant):
-    """Agrega mediciones calculadas que no existen directamente en el Buffer."""
-    by_raw = {str(raw).upper(): (canon, raw, val, unit) for canon, raw, val, unit in rows}
-
-    def add_ratio(raw_num, raw_den, out_raw="OCPR"):
-        num = by_raw.get(raw_num.upper())
-        den = by_raw.get(raw_den.upper())
-        if not num or not den:
-            return
-        den_val = den[2]
-        if den_val in (None, 0):
-            return
-        if out_raw.upper() in by_raw:
-            return
-        value = num[2] / den_val
-        rows.append(("ocpr", out_raw, value, "ratio"))
-        by_raw[out_raw.upper()] = ("ocpr", out_raw, value, "ratio")
-
-    if variant == "1B":
-        add_ratio("PS3", "PT2psia")
-    elif variant == "CFM56-5A":
-        add_ratio("PS3SEL", "PAMB_psi")
-
-
 def get_measurements(buf, mapping, variant):
     """Devuelve lista de (canonical, raw_name, value, unit) para esta variante."""
     rows = []
@@ -440,10 +408,10 @@ def get_measurements(buf, mapping, variant):
             val, unit = entry
             fval = to_float(val)
             if fval is None:
-                continue  # valor no numerico: se omite (no se inventa)
+                continue  # valor no numÃ©rico: se omite (no se inventa)
             rows.append((canon, raw, fval, normalize_unit(unit, mapping)))
-    add_derived_measurements(rows, variant)
     return rows
+
 
 def process_file(session, path, mapping):
     fname = path.name
